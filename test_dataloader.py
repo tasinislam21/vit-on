@@ -8,10 +8,9 @@ import torch
 import torchvision.transforms as transforms
 
 
-def get_transform(normalize=True, mean=None, std=None, downsize=False):
+def get_transform(normalize=True, mean=None, std=None):
     transform_list = []
-    if downsize:
-        transform_list += [transforms.Resize((256, 192))]
+    transform_list += [transforms.Resize((512, 384))]
     transform_list += [transforms.ToTensor()]
     if normalize:
         transform_list += [transforms.Normalize(mean=mean, std=std)]
