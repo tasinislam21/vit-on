@@ -122,15 +122,13 @@ def VAE_decode(latent):
     return latent
 
 for data in train_dataloader:
-    gt_small = data['gt_small'].to(device)
-    clothing_small = data['clothing_small'].to(device)
     input_person = data['input_person'].to(device)
     input_skeleton = data['input_skeleton'].to(device)
     input_clothing = data['input_clothing'].to(device)
     for vae_step in tqdm.tqdm(range(10)):
         vae.train()
-        latents = vae.encode(gt_small).latent_dist.sample()
-        latents_c = vae.encode(clothing_small).latent_dist.sample()
+        latents = vae.encode(input_person).latent_dist.sample()
+        latents_c = vae.encode(input_clothing).latent_dist.sample()
         latents *= 0.18215
         latents_c *= 0.18215
         latents = 1 / 0.18215 * latents
@@ -139,8 +137,8 @@ for data in train_dataloader:
         pred_c = vae.decode(latents_c).sample
         pred_images = pred_images.clamp(-1, 1)
         pred_c = pred_c.clamp(-1, 1)
-        loss = F.mse_loss(pred_images.float(), gt_small.clamp(-1, 1).float(), reduction="mean")
-        loss += F.mse_loss(pred_c.float(), clothing_small.clamp(-1, 1).float(), reduction="mean")
+        loss = F.mse_loss(pred_images.float(), input_person.clamp(-1, 1).float(), reduction="mean")
+        loss += F.mse_loss(pred_c.float(), input_clothing.clamp(-1, 1).float(), reduction="mean")
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
