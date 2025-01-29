@@ -154,4 +154,4 @@ for data in train_dataloader:
         person_data[:, 8:12] = noise
     final_image = VAE_decode(person_data[:, 8:12])
     jpg = tensor2image(final_image)
-    jpg.save('result/{}.jpg'.format(data['name'].item()))
+    jpg.save('result/{}.jpg'.format(data['name'][0]))
