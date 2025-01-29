@@ -1,0 +1,5 @@
+*.pt
+/.idea
+*.sh
+*.zip
+*.ipynb
