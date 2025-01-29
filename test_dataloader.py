@@ -54,7 +54,8 @@ class BaseDataset(data.Dataset):
         skeleton = self.m(self.transform_skeleton(skeleton))
         agnostic = self.m(self.transform_candidate(agnostic_img))
 
-        return {'input_person': agnostic,
+        return {'name':name,
+                'input_person': agnostic,
                 'input_skeleton': skeleton,
                 'input_clothing': clothing}
 
