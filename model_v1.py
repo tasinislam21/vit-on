@@ -3,6 +3,7 @@ from timm.models.vision_transformer import PatchEmbed, Attention, Mlp
 import math
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 def get_2d_sincos_pos_embed(embed_dim, grid_size, cls_token=False, extra_tokens=0):
     grid_h = np.arange(grid_size, dtype=np.float32)
@@ -52,6 +53,64 @@ class FinalLayer(nn.Module):
         x = modulate(self.norm_final(x), shift, scale)
         x = self.linear(x)
         return x
+
+class AttentionBlock(nn.Module):
+    def __init__(self, n_head: int, n_embd: int, d_context=1152):
+        super().__init__()
+        channels = n_head * n_embd
+        self.layernorm_2 = nn.LayerNorm(channels)
+        self.attention_2 = CrossAttention(n_head, channels, d_context, in_proj_bias=False)
+        self.layernorm_3 = nn.LayerNorm(channels)
+        self.linear_geglu_1  = nn.Linear(channels, 4 * channels * 2)
+        self.linear_geglu_2 = nn.Linear(4 * channels, channels)
+
+    def forward(self, x, context):
+        residue_short = x
+        x = self.layernorm_2(x)
+        x = self.attention_2(x, context)
+        x += residue_short
+
+        residue_short = x
+        x = self.layernorm_3(x)
+        x, gate = self.linear_geglu_1(x).chunk(2, dim=-1)
+        x = x * F.gelu(gate)
+        x = self.linear_geglu_2(x)
+        x += residue_short
+        return x
+
+class CrossAttention(nn.Module):
+    def __init__(self, n_heads, d_embed, d_cross, in_proj_bias=True, out_proj_bias=True):
+        super().__init__()
+        self.q_proj   = nn.Linear(d_embed, d_embed, bias=in_proj_bias)
+        self.k_proj   = nn.Linear(d_cross, d_embed, bias=in_proj_bias)
+        self.v_proj   = nn.Linear(d_cross, d_embed, bias=in_proj_bias)
+        self.out_proj = nn.Linear(d_embed, d_embed, bias=out_proj_bias)
+        self.n_heads = n_heads
+        self.d_head = d_embed // n_heads
+
+    def forward(self, x, y):
+        input_shape = x.shape
+        batch_size, sequence_length, d_embed = input_shape
+        interim_shape = (batch_size, -1, self.n_heads, self.d_head)
+
+        q = self.q_proj(x)
+        k = self.k_proj(y)
+        v = self.v_proj(y)
+
+        q = q.view(interim_shape).transpose(1, 2)
+        k = k.view(interim_shape).transpose(1, 2)
+        v = v.view(interim_shape).transpose(1, 2)
+
+        weight = q @ k.transpose(-1, -2)
+        weight /= math.sqrt(self.d_head)
+        weight = F.softmax(weight, dim=-1)
+
+        output = weight @ v
+        output = output.transpose(1, 2).contiguous()
+        output = output.view(input_shape)
+        output = self.out_proj(output)
+        return output
+
 
 class DiTBlock(nn.Module):
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
@@ -148,6 +207,10 @@ class DiT(nn.Module):
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
 
+        self.ca_blocks = nn.ModuleList([
+            AttentionBlock(4, 288) for _ in range(depth)
+        ])
+
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
@@ -223,10 +286,10 @@ class DiT(nn.Module):
         person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         garment = self.garment_embedder(garment)
         t = self.t_embedder(t)  # (N, D)
-        for person_block, garment_block in zip(self.person_blocks, self.garment_blocks):
+        for person_block, garment_block, ca_block in zip(self.person_blocks, self.garment_blocks, self.ca_blocks):
             person = person_block(person, t)
             garment = garment_block(garment, t)
-            person += garment
+            person = ca_block(person, garment)
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
         person = self.unpatchify(person)  # (N, out_channels, H, W)
         return person
