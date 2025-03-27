@@ -7,11 +7,9 @@ import os
 from transformers import CLIPVisionModel, CLIPProcessor
 
 
-def get_transform(normalize=True, mean=None, std=None, downsize=True):
+def get_transform(normalize=True, mean=None, std=None):
     transform_list = []
     transform_list += [transforms.ToTensor()]
-    if downsize:
-        transform_list += [transforms.Resize((256, 192))]
     if normalize:
         transform_list += [transforms.Normalize(mean=mean, std=std)]
     return transforms.Compose(transform_list)
@@ -74,4 +72,4 @@ for i in tqdm.tqdm(range(len(name_list))):
     torch.save(skeleton, osp.join('dataset_binary','input_skeleton', file_name.replace('.jpg', '.pt')))
     torch.save(clothing, osp.join('dataset_binary','input_clothing', file_name.replace('.jpg', '.pt')))
     torch.save(agnostic, osp.join('dataset_binary','agnostic', file_name.replace('.jpg', '.pt')))
-    torch.save(clip_clothing, osp.join('dataset_binary','clip_clothing', file_name.replace('.jpg', '.pt')))
+    torch.save(clip_clothing[0], osp.join('dataset_binary','clip_clothing', file_name.replace('.jpg', '.pt')))
