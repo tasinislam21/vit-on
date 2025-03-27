@@ -66,7 +66,7 @@ for i in tqdm.tqdm(range(len(name_list))):
     if not os.path.exists(osp.join('dataset_binary','clip_clothing')):
         os.makedirs(osp.join('dataset_binary','clip_clothing'))
 
-    clip_clothing = clip_processor(images=list(color), return_tensors="pt")
+    clip_clothing = clip_processor(images=color, return_tensors="pt")
     clip_clothing = {k: v for k, v in clip_clothing.items()}
     clip_clothing = clip_encoder(**clip_clothing).last_hidden_state
 
