@@ -166,10 +166,10 @@ def main(args):
             clip_clothing = data['clip_clothing'].to(device)
 
             gt = data['gt'].to(device)
-            encoded_person = vae.encode(input_person)
-            encoded_skeleton = vae.encode(input_skeleton)
-            encoded_clothing = vae.encode(input_clothing)
-            encoded_gt = vae.encode(gt)
+            encoded_person = vae.encode(input_person).latent_dist.sample() * 0.18215
+            encoded_skeleton = vae.encode(input_skeleton).latent_dist.sample() * 0.18215
+            encoded_clothing = vae.encode(input_clothing).latent_dist.sample() * 0.18215
+            encoded_gt = vae.encode(gt).latent_dist.sample() * 0.18215
 
             person_data = torch.cat([encoded_person, encoded_skeleton], dim=1)
             clothing_data = torch.cat([encoded_clothing, encoded_skeleton], dim=1)
