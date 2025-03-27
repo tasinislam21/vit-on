@@ -12,7 +12,7 @@ from copy import deepcopy
 from collections import OrderedDict
 from tensorboardX import SummaryWriter
 import torchvision.transforms as transforms
-import model_v1
+from model import DiT
 from train_dataloader import BaseDataset
 import torchvision
 
@@ -81,7 +81,7 @@ def main(args):
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
     #checkpoints = torch.load("checkpoint/backup_70.pt", map_location="cpu")
-    model = model_v1.DiT(input_size=args.latent_size, depth=8).to(device)
+    model = DiT(input_size=args.latent_size, depth=8).to(device)
     #model.load_state_dict(checkpoints["model"])
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     #ema.load_state_dict(checkpoints["ema"])
@@ -163,6 +163,7 @@ def main(args):
             input_person = data['input_person'].to(device)
             input_skeleton = data['input_skeleton'].to(device)
             input_clothing = data['input_clothing'].to(device)
+            clip_clothing = data['clip_clothing'].to(device)
 
             gt = data['gt'].to(device)
             encoded_person = vae.encode(input_person)
