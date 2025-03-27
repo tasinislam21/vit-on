@@ -4,6 +4,9 @@ from PIL import Image
 import torch
 import tqdm
 import os
+from transformers import CLIPVisionModel, CLIPProcessor
+
+
 def get_transform(normalize=True, mean=None, std=None, downsize=True):
     transform_list = []
     transform_list += [transforms.ToTensor()]
@@ -26,6 +29,10 @@ transform_mask = get_transform(normalize=False)
 transform_clothes = get_transform(mean=mean_clothing, std=std_clothing)
 transform_candidate = get_transform(mean=mean_candidate, std=std_candidate)
 transform_skeleton = get_transform(mean=mean_skeleton, std=std_skeleton)
+
+clip_encoder = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
+clip_encoder.requires_grad_(False)
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 name_list = os.listdir('dataset/image')
 
@@ -56,8 +63,15 @@ for i in tqdm.tqdm(range(len(name_list))):
         os.makedirs(osp.join('dataset_binary','input_clothing'))
     if not os.path.exists(osp.join('dataset_binary','agnostic')):
         os.makedirs(osp.join('dataset_binary','agnostic'))
+    if not os.path.exists(osp.join('dataset_binary','clip_clothing')):
+        os.makedirs(osp.join('dataset_binary','clip_clothing'))
+
+    clip_clothing = clip_processor(images=list(color), return_tensors="pt")
+    clip_clothing = {k: v for k, v in clip_clothing.items()}
+    clip_clothing = clip_encoder(**clip_clothing).last_hidden_state
 
     torch.save(ground_truth, osp.join('dataset_binary','gt', file_name.replace('.jpg', '.pt')))
     torch.save(skeleton, osp.join('dataset_binary','input_skeleton', file_name.replace('.jpg', '.pt')))
     torch.save(clothing, osp.join('dataset_binary','input_clothing', file_name.replace('.jpg', '.pt')))
     torch.save(agnostic, osp.join('dataset_binary','agnostic', file_name.replace('.jpg', '.pt')))
+    torch.save(clip_clothing, osp.join('dataset_binary','clip_clothing', file_name.replace('.jpg', '.pt')))
