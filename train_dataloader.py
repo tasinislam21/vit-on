@@ -15,7 +15,6 @@ class BaseDataset(data.Dataset):
         input_person = self.m(torch.load(osp.join('dataset_binary', 'agnostic', name)))
         input_skeleton = self.m(torch.load(osp.join('dataset_binary', 'input_skeleton', name)))
         input_clothing = self.m(torch.load(osp.join('dataset_binary', 'input_clothing', name)))
-
         return {'gt': gt, 'input_person': input_person,
                 'input_skeleton': input_skeleton,
                 'input_clothing': input_clothing,
