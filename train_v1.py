@@ -201,7 +201,7 @@ def main(args):
                 writer.add_image('Clothing', torchvision.utils.make_grid(inv_normalize(input_clothing)), train_steps)
                 writer.add_image('Fused', torchvision.utils.make_grid(inv_normalize(final_image)), train_steps)
             train_steps += 1
-        if get_rank() == 0 and epoch % 10 == 0:
+        if get_rank() == 0 and epoch % 20 == 0:
             checkpoint = {
                 "model": model.module.state_dict(),
                 "ema": ema.state_dict(),
