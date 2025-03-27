@@ -15,7 +15,7 @@ import torchvision.transforms as transforms
 import model_v1
 from train_dataloader import BaseDataset
 import torchvision
-from transformers import CLIPVisionModel
+from transformers import CLIPVisionModel, CLIPProcessor
 
 mean_candidate = [0.74112587, 0.69617281, 0.68865463]
 std_candidate = [0.2941623, 0.30806473, 0.30613222]
@@ -98,6 +98,7 @@ def main(args):
 
     clip_encoder = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32").to(device)
     clip_encoder.requires_grad_(False)
+    clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
     #opt.load_state_dict(checkpoints["opt"])
@@ -173,7 +174,10 @@ def main(args):
             encoded_skeleton = vae.encode(input_skeleton)
             encoded_clothing = vae.encode(input_clothing)
             encoded_gt = vae.encode(gt)
-            clip_clothing = clip_encoder(**input_clothing).last_hidden_state.to(device)
+
+            clip_clothing = clip_processor(images=list(input_clothing), return_tensors="pt", do_rescale=False)
+            clip_clothing = {k: v.to(device) for k, v in clip_clothing.items()}
+            clip_clothing = clip_encoder(**clip_clothing).last_hidden_state.to(device)
 
             person_data = torch.cat([encoded_person, encoded_skeleton], dim=1)
             clothing_data = torch.cat([encoded_clothing, encoded_skeleton], dim=1)
