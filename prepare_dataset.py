@@ -9,6 +9,7 @@ from transformers import CLIPVisionModel, CLIPProcessor
 
 def get_transform(normalize=True, mean=None, std=None):
     transform_list = []
+    transform_list += [transforms.Resize((512, 384))]
     transform_list += [transforms.ToTensor()]
     if normalize:
         transform_list += [transforms.Normalize(mean=mean, std=std)]
