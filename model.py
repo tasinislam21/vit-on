@@ -61,22 +61,13 @@ class AttentionBlock(nn.Module):
         channels = n_head * n_embd
         self.layernorm_2 = nn.LayerNorm(channels)
         self.attention_2 = CrossAttention(n_head, channels, d_context, in_proj_bias=False)
-        self.layernorm_3 = nn.LayerNorm(channels)
-        self.linear_geglu_1  = nn.Linear(channels, 4 * channels * 2)
-        self.linear_geglu_2 = nn.Linear(4 * channels, channels)
+
 
     def forward(self, x, context):
         x = rearrange(x, 'b c t -> b t c')
         residue_short = x
         x = self.layernorm_2(x)
         x = self.attention_2(x, context)
-        x += residue_short
-
-        residue_short = x
-        x = self.layernorm_3(x)
-        x, gate = self.linear_geglu_1(x).chunk(2, dim=-1)
-        x = x * F.gelu(gate)
-        x = self.linear_geglu_2(x)
         x += residue_short
         x = rearrange(x, 'b t c -> b c t')
         return x
@@ -221,20 +212,11 @@ class DiT(nn.Module):
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
-
-        self.person_blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
-        ])
-
-        self.garment_blocks = nn.ModuleList([
+        self.dit_blocks = nn.ModuleList([
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
 
         self.ca_blocks = nn.ModuleList([
-            AttentionBlock(8, 128) for _ in range(depth)
-        ])
-
-        self.clip_blocks = nn.ModuleList([
             AttentionBlock(8, 128) for _ in range(depth)
         ])
 
@@ -275,11 +257,7 @@ class DiT(nn.Module):
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
         # Zero-out adaLN modulation layers in DiT blocks:
-        for block in self.person_blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
-
-        for block in self.garment_blocks:
+        for block in self.dit_blocks:
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
@@ -305,19 +283,15 @@ class DiT(nn.Module):
         return imgs
 
     def forward(self, person, garment, clip_garment, t):
-        """
-        Forward pass of DiT.
-        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
-        t: (N,) tensor of diffusion timesteps
-        """
         person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        garment = self.garment_embedder(garment)
+        garment = self.garment_embedder(garment) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
+
         t = self.t_embedder(t)  # (N, D)
-        for person_block, garment_block, ca_block, clip_block in zip(self.person_blocks, self.garment_blocks, self.ca_blocks, self.clip_blocks):
+        garment_group = torch.cat([garment, clip_garment], dim=1) if len(person.shape) == 3 else torch.cat(
+            [garment, clip_garment], dim=0)
+        for person_block, ca_block in zip(self.dit_blocks, self.ca_blocks):
+            person = ca_block(person, garment_group)
             person = person_block(person, t)
-            garment = garment_block(garment, t)
-            garment = clip_block(garment, clip_garment)
-            person = ca_block(person, garment)
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
         person = self.unpatchify(person)  # (N, out_channels, H, W)
         return person
