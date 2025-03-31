@@ -55,55 +55,6 @@ class FinalLayer(nn.Module):
         x = self.linear(x)
         return x
 
-class AttentionBlock(nn.Module):
-    def __init__(self, n_head: int, n_embd: int, d_context=768):
-        super().__init__()
-        channels = n_head * n_embd
-        self.layernorm_2 = nn.LayerNorm(channels)
-        self.attention_2 = CrossAttention(n_head, channels, d_context, in_proj_bias=False)
-
-
-    def forward(self, x, context):
-        x = rearrange(x, 'b c t -> b t c')
-        residue_short = x
-        x = self.layernorm_2(x)
-        x = self.attention_2(x, context)
-        x += residue_short
-        x = rearrange(x, 'b t c -> b c t')
-        return x
-
-class CrossAttention(nn.Module):
-    def __init__(self, n_heads, d_embed, d_cross, in_proj_bias=True, out_proj_bias=True):
-        super().__init__()
-        self.q_proj   = nn.Linear(d_embed, d_embed, bias=in_proj_bias)
-        self.k_proj   = nn.Linear(d_cross, d_embed, bias=in_proj_bias)
-        self.v_proj   = nn.Linear(d_cross, d_embed, bias=in_proj_bias)
-        self.out_proj = nn.Linear(d_embed, d_embed, bias=out_proj_bias)
-        self.n_heads = n_heads
-        self.d_head = d_embed // n_heads
-
-    def forward(self, x, y):
-        input_shape = x.shape
-        batch_size, sequence_length, d_embed = input_shape
-        interim_shape = (batch_size, -1, self.n_heads, self.d_head)
-
-        q = self.q_proj(x)
-        k = self.k_proj(y)
-        v = self.v_proj(y)
-
-        q = q.view(interim_shape).transpose(1, 2)
-        k = k.view(interim_shape).transpose(1, 2)
-        v = v.view(interim_shape).transpose(1, 2)
-
-        weight = q @ k.transpose(-1, -2)
-        weight /= math.sqrt(self.d_head)
-        weight = F.softmax(weight, dim=-1)
-
-        output = weight @ v
-        output = output.transpose(1, 2).contiguous()
-        output = output.view(input_shape)
-        output = self.out_proj(output)
-        return output
 
 class DiTBlock(nn.Module):
     def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
@@ -161,6 +112,55 @@ class TimestepEmbedder(nn.Module):
         t_emb = self.mlp(t_freq)
         return t_emb
 
+class AttentionBlock(nn.Module):
+    def __init__(self, n_head: int, n_embd: int, d_context=768):
+        super().__init__()
+        channels = n_head * n_embd
+        self.layernorm_2 = nn.LayerNorm(channels)
+        self.attention_2 = CrossAttention(n_head, channels, d_context, in_proj_bias=False)
+
+    def forward(self, x, context):
+        x = rearrange(x, 'b c t -> b t c')
+        residue_short = x
+        x = self.layernorm_2(x)
+        x = self.attention_2(x, context)
+        x += residue_short
+        x = rearrange(x, 'b t c -> b c t')
+        return x
+
+class CrossAttention(nn.Module):
+    def __init__(self, n_heads, d_embed, d_cross, in_proj_bias=True, out_proj_bias=True):
+        super().__init__()
+        self.q_proj   = nn.Linear(d_embed, d_embed, bias=in_proj_bias)
+        self.k_proj   = nn.Linear(d_cross, d_embed, bias=in_proj_bias)
+        self.v_proj   = nn.Linear(d_cross, d_embed, bias=in_proj_bias)
+        self.out_proj = nn.Linear(d_embed, d_embed, bias=out_proj_bias)
+        self.n_heads = n_heads
+        self.d_head = d_embed // n_heads
+
+    def forward(self, x, y):
+        input_shape = x.shape
+        batch_size, sequence_length, d_embed = input_shape
+        interim_shape = (batch_size, -1, self.n_heads, self.d_head)
+
+        q = self.q_proj(x)
+        k = self.k_proj(y)
+        v = self.v_proj(y)
+
+        q = q.view(interim_shape).transpose(1, 2)
+        k = k.view(interim_shape).transpose(1, 2)
+        v = v.view(interim_shape).transpose(1, 2)
+
+        weight = q @ k.transpose(-1, -2)
+        weight /= math.sqrt(self.d_head)
+        weight = F.softmax(weight, dim=-1)
+
+        output = weight @ v
+        output = output.transpose(1, 2).contiguous()
+        output = output.view(input_shape)
+        output = self.out_proj(output)
+        return output
+
 class Embedding_Adapter(nn.Module):
     def __init__(self, input_nc=38, output_nc=4, norm_layer=nn.InstanceNorm2d, chkpt=None):
         super(Embedding_Adapter, self).__init__()
@@ -188,8 +188,7 @@ class DiT(nn.Module):
             self,
             input_size=64,
             patch_size=2,
-            person_channels=12,  # noise + person + skeleton
-            garment_channels=8, # cloth + skeleton
+            person_channels=16,  # noise + person + skeleton + cloth
             hidden_size=768,
             depth=8,
             num_heads=16,
@@ -199,25 +198,21 @@ class DiT(nn.Module):
         super().__init__()
         self.learn_sigma = learn_sigma
         self.person_channels = person_channels
-        self.garment_channels = garment_channels
         self.out_channels = 4
         self.patch_size = patch_size
         self.num_heads = num_heads
 
         self.person_embedder = PatchEmbed(input_size, patch_size, person_channels, hidden_size, bias=True)
-        self.garment_embedder = PatchEmbed(input_size, patch_size, garment_channels, hidden_size, bias=True)
 
         self.t_embedder = TimestepEmbedder(hidden_size)
         num_patches = self.person_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
+        self.ca_blocks = AttentionBlock(8, 128)
+
         self.dit_blocks = nn.ModuleList([
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
-        ])
-
-        self.ca_blocks = nn.ModuleList([
-            AttentionBlock(8, 128) for _ in range(depth)
         ])
 
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
@@ -241,14 +236,6 @@ class DiT(nn.Module):
         w = self.person_embedder.proj.weight.data
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.person_embedder.proj.bias, 0)
-
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.garment_embedder.num_patches ** 0.5))
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        w = self.garment_embedder.proj.weight.data
-        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-        nn.init.constant_(self.garment_embedder.proj.bias, 0)
 
         # Initialize label embedding table:
 
@@ -282,16 +269,12 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, person, garment, clip_garment, t):
-        person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        garment = self.garment_embedder(garment) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-
+    def forward(self, person,  clip_garment, t):
+        full_data = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)  # (N, D)
-        garment_group = torch.cat([garment, clip_garment], dim=1) if len(person.shape) == 3 else torch.cat(
-            [garment, clip_garment], dim=0)
-        for person_block, ca_block in zip(self.dit_blocks, self.ca_blocks):
-            person = ca_block(person, garment_group)
-            person = person_block(person, t)
-        person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
-        person = self.unpatchify(person)  # (N, out_channels, H, W)
+        full_data = self.ca_blocks(full_data, clip_garment)
+        for person_block in self.dit_blocks:
+            full_data = person_block(full_data, t)
+        full_data = self.final_layer(full_data, t)  # (N, T, patch_size ** 2 * out_channels)
+        person = self.unpatchify(full_data)  # (N, out_channels, H, W)
         return person
