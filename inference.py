@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import tqdm
-import model
+from model import DiT
 from test_dataloader import BaseDataset
 from diffusers import AutoencoderKL
 import torch.nn.functional as F
@@ -53,8 +53,8 @@ posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 
 mseloss = torch.nn.MSELoss()
 
-checkpoint = torch.load("ema_490.pt", map_location='cpu')
-model = model_v1.DiT().to(device)
+checkpoint = torch.load("final.pt", map_location='cpu')
+model = DiT().to(device)
 model.eval()
 model.load_state_dict(checkpoint)
 vae = AutoencoderKL.from_pretrained(
@@ -87,23 +87,23 @@ train_dataloader = torch.utils.data.DataLoader(
 
 
 @torch.no_grad()
-def sample_timestep(input_person, input_clothing, t):
-    betas_t = get_index_from_list(betas, t, input_person[:,8:12].shape)
+def sample_timestep(input_person, clip_clothing, t):
+    betas_t = get_index_from_list(betas, t, input_person[:, 12:16].shape)
     sqrt_one_minus_alphas_cumprod_t = get_index_from_list(
-        sqrt_one_minus_alphas_cumprod, t, input_person[:,8:12].shape
+        sqrt_one_minus_alphas_cumprod, t, input_person[:, 12:16].shape
     )
-    sqrt_recip_alphas_t = get_index_from_list(sqrt_recip_alphas, t, input_person[:,8:12].shape)
+    sqrt_recip_alphas_t = get_index_from_list(sqrt_recip_alphas, t, input_person[:, 12:16].shape)
     # Call model (current image - noise prediction)
     with torch.cuda.amp.autocast():
-        sample_output = model(input_person, input_clothing, t.float())
+        sample_output = model(input_person, clip_clothing, t.float())
     model_mean = sqrt_recip_alphas_t * (
-            input_person[:,8:12] - betas_t * sample_output / sqrt_one_minus_alphas_cumprod_t
+            input_person[:, 12:16] - betas_t * sample_output / sqrt_one_minus_alphas_cumprod_t
     )
     if t.item() == 0:
         return model_mean
     else:
-        noise = torch.randn_like(input_person[:,8:12])
-        posterior_variance_t = get_index_from_list(posterior_variance, t, input_person[:,8:12].shape)
+        noise = torch.randn_like(input_person[:, 12:16])
+        posterior_variance_t = get_index_from_list(posterior_variance, t, input_person[:, 12:16].shape)
         return model_mean + torch.sqrt(posterior_variance_t) * noise
 
 def tensor2image(tensor):
@@ -125,6 +125,8 @@ for data in train_dataloader:
     input_person = data['input_person'].to(device)
     input_skeleton = data['input_skeleton'].to(device)
     input_clothing = data['input_clothing'].to(device)
+    clip_clothing = data['clip_clothing'].to(device)
+
     for vae_step in tqdm.tqdm(range(10)):
         vae.train()
         latents = vae.encode(input_person).latent_dist.sample()
@@ -147,11 +149,11 @@ for data in train_dataloader:
     encoded_skeleton = vae.encode(input_skeleton).latent_dist.sample() * 0.18215
     encoded_clothing = vae.encode(input_clothing).latent_dist.sample() * 0.18215
     noise = torch.randn([1, 4, 64, 64]).to(device)
-    person_data = torch.cat([encoded_person, encoded_skeleton, noise], dim=1)
+    person_data = torch.cat([encoded_person, encoded_skeleton, encoded_clothing, noise], dim=1)
     for i in tqdm.tqdm(range(0, T)[::-1]):
         t = torch.full((1,), i, device=device).long()
-        noise = sample_timestep(person_data, encoded_clothing, t)
-        person_data[:, 8:12] = noise
-    final_image = VAE_decode(person_data[:, 8:12])
+        noise = sample_timestep(person_data, clip_clothing, t)
+        person_data[:, 12:16] = noise
+    final_image = VAE_decode(person_data[:, 12:16])
     jpg = tensor2image(final_image)
     jpg.save('result/{}.jpg'.format(data['name'][0]))

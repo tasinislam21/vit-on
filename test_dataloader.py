@@ -1,5 +1,4 @@
-from multiprocessing.util import get_temp_dir
-
+from transformers import CLIPVisionModel, CLIPProcessor
 import torch.utils.data as data
 import os
 import os.path as osp
@@ -25,6 +24,10 @@ std_candidate = [0.2941623, 0.30806473, 0.30613222]
 
 mean_skeleton = [0.05440789, 0.07170792, 0.04121648]
 std_skeleton = [0.20046051, 0.23692659, 0.16482468]
+
+clip_encoder = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
+clip_encoder.requires_grad_(False)
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 
 class BaseDataset(data.Dataset):
     def __init__(self):
@@ -54,10 +57,16 @@ class BaseDataset(data.Dataset):
         skeleton = self.m(self.transform_skeleton(skeleton))
         agnostic = self.m(self.transform_candidate(agnostic_img))
 
+        clip_clothing = clip_processor(images=color, return_tensors="pt")
+        clip_clothing = {k: v for k, v in clip_clothing.items()}
+        clip_clothing = clip_encoder(**clip_clothing).last_hidden_state
+
         return {'name':name,
                 'input_person': agnostic,
                 'input_skeleton': skeleton,
-                'input_clothing': clothing}
+                'input_clothing': clothing,
+                'clip_clothing': clip_clothing
+                }
 
     def __len__(self):
         return len(self.name_list)
