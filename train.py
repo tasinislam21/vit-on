@@ -12,9 +12,10 @@ from copy import deepcopy
 from collections import OrderedDict
 from tensorboardX import SummaryWriter
 import torchvision.transforms as transforms
-from model import DiT
+from models import DiT_models
 from train_dataloader import BaseDataset
 import torchvision
+from timm.models.vision_transformer import PatchEmbed
 
 mean_candidate = [0.74112587, 0.69617281, 0.68865463]
 std_candidate = [0.2941623, 0.30806473, 0.30613222]
@@ -60,7 +61,7 @@ def forward_diffusion_sample(x_0, t):
     return sqrt_alphas_cumprod_t.to(t.device) * x_0.to(t.device) \
     + sqrt_one_minus_alphas_cumprod_t.to(t.device) * noise.to(t.device), noise.to(t.device)
 
-T = 100
+T = 250
 betas = cosine_beta_schedule(timesteps=T)
 alphas = 1. - betas
 alphas_cumprod = torch.cumprod(alphas, axis=0)
@@ -81,7 +82,14 @@ def main(args):
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
     #checkpoints = torch.load("checkpoint/backup_70.pt", map_location="cpu")
-    model = DiT(input_size=args.latent_size, depth=12).to(device)
+    model = DiT_models["DiT-XL/2"](
+        input_size=64,
+        num_classes=1000
+    ).to(device)
+    model.load_state_dict(torch.load("DiT-XL-2-512x512.pt"))
+    model.eval()
+    model.x_embedder = PatchEmbed(64, 2, 16, 1152, bias=True).to(device)
+    del model.y_embedder
     #model.load_state_dict(checkpoints["model"])
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     #ema.load_state_dict(checkpoints["ema"])
@@ -120,18 +128,18 @@ def main(args):
     if get_rank() == 0:
         writer = SummaryWriter('runs')
 
-    def get_loss(input_person, clip_clothing, gt):
+    def get_loss(input_person, gt):
         b, _, _, _ = input_person.shape
         timesteps = torch.randint(0, T, (b,), device=device)
         timesteps = timesteps.long()
         x_noisy, noise = forward_diffusion_sample(gt, timesteps)
         input_person = torch.cat([input_person, x_noisy], dim=1)
-        noise_pred = model(input_person, clip_clothing, timesteps.float())
+        noise_pred = model.forward_with_cond(input_person, timesteps.float())
         loss = mseloss(noise_pred, noise)
         return loss
 
     @torch.no_grad()
-    def sample_timestep(input_person, clip_clothing, t):
+    def sample_timestep(input_person,  t):
         betas_t = get_index_from_list(betas, t, input_person[:,12:16].shape)
         sqrt_one_minus_alphas_cumprod_t = get_index_from_list(
             sqrt_one_minus_alphas_cumprod, t, input_person[:,12:16].shape
@@ -139,7 +147,7 @@ def main(args):
         sqrt_recip_alphas_t = get_index_from_list(sqrt_recip_alphas, t, input_person[:,12:16].shape)
         # Call model (current image - noise prediction)
         with torch.cuda.amp.autocast():
-            sample_output = ema(input_person, clip_clothing, t.float())
+            sample_output = ema.forward_with_cond(input_person,  t.float())
         model_mean = sqrt_recip_alphas_t * (
                 input_person[:,12:16] - betas_t * sample_output / sqrt_one_minus_alphas_cumprod_t
         )
@@ -162,7 +170,6 @@ def main(args):
             input_person = data['input_person'].to(device)
             input_skeleton = data['input_skeleton'].to(device)
             input_clothing = data['input_clothing'].to(device)
-            clip_clothing = data['clip_clothing'].to(device)
 
             gt = data['gt'].to(device)
             encoded_person = vae.encode(input_person).latent_dist.sample() * 0.18215
@@ -171,7 +178,7 @@ def main(args):
             encoded_gt = vae.encode(gt).latent_dist.sample() * 0.18215
 
             person_data = torch.cat([encoded_person, encoded_skeleton, encoded_clothing], dim=1)
-            loss = get_loss(input_person=person_data, clip_clothing=clip_clothing, gt=encoded_gt)
+            loss = get_loss(input_person=person_data, gt=encoded_gt)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -184,7 +191,7 @@ def main(args):
                 person_data = torch.cat([encoded_person, encoded_skeleton, encoded_clothing, noise], dim=1)
                 for i in range(0, T)[::-1]:
                     t = torch.full((1,), i, device=device).long()
-                    noise = sample_timestep(person_data, clip_clothing, t)
+                    noise = sample_timestep(person_data, t)
                     person_data[:,12:16] = noise
                 final_image = VAE_decode(person_data[:,12:16])
                 writer.add_image('Person', torchvision.utils.make_grid(inv_normalize(input_person)), train_steps)
