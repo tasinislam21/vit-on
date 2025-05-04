@@ -230,22 +230,22 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, x, t, y):
-        """
-        Forward pass of DiT.
-        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
-        t: (N,) tensor of diffusion timesteps
-        y: (N,) tensor of class labels
-        """
-        x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        t = self.t_embedder(t)                   # (N, D)
-        y = self.y_embedder(y, self.training)    # (N, D)
-        c = t + y                                # (N, D)
-        for block in self.blocks:
-            x = block(x, c)                      # (N, T, D)
-        x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
-        x = self.unpatchify(x)                   # (N, out_channels, H, W)
-        return x
+    # def forward(self, x, t, y):
+    #     """
+    #     Forward pass of DiT.
+    #     x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
+    #     t: (N,) tensor of diffusion timesteps
+    #     y: (N,) tensor of class labels
+    #     """
+    #     x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
+    #     t = self.t_embedder(t)                   # (N, D)
+    #     y = self.y_embedder(y, self.training)    # (N, D)
+    #     c = t + y                                # (N, D)
+    #     for block in self.blocks:
+    #         x = block(x, c)                      # (N, T, D)
+    #     x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
+    #     x = self.unpatchify(x)                   # (N, out_channels, H, W)
+    #     return x
 
     def forward_with_cfg(self, x, t, y, cfg_scale):
         """
@@ -265,7 +265,7 @@ class DiT(nn.Module):
         eps = torch.cat([half_eps, half_eps], dim=0)
         return torch.cat([eps, rest], dim=1)
 
-    def forward_with_cond(self, x, t):
+    def forward(self, x, t):
         x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         t = self.t_embedder(t)  # (N, D)
         for block in self.blocks:

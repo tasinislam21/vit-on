@@ -137,7 +137,7 @@ def main(args):
         timesteps = timesteps.long()
         x_noisy, noise = forward_diffusion_sample(gt, timesteps)
         input_person = torch.cat([input_person, x_noisy], dim=1)
-        noise_pred = model.forward_with_cond(input_person, timesteps.float())
+        noise_pred = model(input_person, timesteps.float())
         loss = mseloss(noise_pred, noise)
         return loss
 
@@ -150,7 +150,7 @@ def main(args):
         sqrt_recip_alphas_t = get_index_from_list(sqrt_recip_alphas, t, input_person[:,12:16].shape)
         # Call model (current image - noise prediction)
         with torch.cuda.amp.autocast():
-            sample_output = ema.forward_with_cond(input_person,  t.float())
+            sample_output = ema(input_person,  t.float())
         model_mean = sqrt_recip_alphas_t * (
                 input_person[:,12:16] - betas_t * sample_output / sqrt_one_minus_alphas_cumprod_t
         )
