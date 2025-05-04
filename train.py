@@ -16,6 +16,7 @@ from models import DiT_models
 from train_dataloader import BaseDataset
 import torchvision
 from timm.models.vision_transformer import PatchEmbed
+from models import FinalLayer
 
 mean_candidate = [0.74112587, 0.69617281, 0.68865463]
 std_candidate = [0.2941623, 0.30806473, 0.30613222]
@@ -89,6 +90,8 @@ def main(args):
     model.load_state_dict(torch.load("DiT-XL-2-512x512.pt"))
     model.eval()
     model.x_embedder = PatchEmbed(64, 2, 16, 1152, bias=True).to(device)
+    model.final_layer = FinalLayer(1152, 2, 4).to(device)
+    model.out_channels = 4
     del model.y_embedder
     #model.load_state_dict(checkpoints["model"])
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
@@ -121,7 +124,7 @@ def main(args):
         drop_last=False)
 
     update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
-    model.train()  # important! This enables embedding dropout for classifier-free guidance
+    model.train()
     ema.eval()
     train_steps = 0
 
