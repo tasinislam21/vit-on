@@ -63,7 +63,7 @@ model.x_embedder = PatchEmbed(64, 2, 16, 1152, bias=True).to(device)
 model.final_layer = FinalLayer(1152, 2, 4).to(device)
 model.out_channels = 4
 del model.y_embedder
-model.load_state_dict(torch.load("checkpoint/backup_460.pt")['ema'])
+model.load_state_dict(torch.load("checkpoint/backup_460.pt", weights_only=False)['ema'])
 vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-mse").to(device)
 vae.requires_grad_(False)
 # vae_trainable_params = []
