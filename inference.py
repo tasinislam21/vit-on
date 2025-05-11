@@ -90,7 +90,7 @@ train_dataloader = torch.utils.data.DataLoader(
 
 
 @torch.no_grad()
-def sample_timestep(input_person, clip_clothing, t):
+def sample_timestep(input_person, t):
     betas_t = get_index_from_list(betas, t, input_person[:, 12:16].shape)
     sqrt_one_minus_alphas_cumprod_t = get_index_from_list(
         sqrt_one_minus_alphas_cumprod, t, input_person[:, 12:16].shape
@@ -98,7 +98,7 @@ def sample_timestep(input_person, clip_clothing, t):
     sqrt_recip_alphas_t = get_index_from_list(sqrt_recip_alphas, t, input_person[:, 12:16].shape)
     # Call model (current image - noise prediction)
     with torch.cuda.amp.autocast():
-        sample_output = model(input_person, clip_clothing, t.float())
+        sample_output = model(input_person, t.float())
     model_mean = sqrt_recip_alphas_t * (
             input_person[:, 12:16] - betas_t * sample_output / sqrt_one_minus_alphas_cumprod_t
     )
@@ -122,7 +122,6 @@ for data in train_dataloader:
     input_person = data['input_person'].to(device)
     input_skeleton = data['input_skeleton'].to(device)
     input_clothing = data['input_clothing'].to(device)
-    clip_clothing = data['clip_clothing'].to(device)
 
     # for vae_step in tqdm.tqdm(range(10)):
     #     vae.train()
@@ -149,7 +148,7 @@ for data in train_dataloader:
     person_data = torch.cat([encoded_person, encoded_skeleton, encoded_clothing, noise], dim=1)
     for i in tqdm.tqdm(range(0, T)[::-1]):
         t = torch.full((1,), i, device=device).long()
-        noise = sample_timestep(person_data, clip_clothing, t)
+        noise = sample_timestep(person_data, t)
         person_data[:, 12:16] = noise
     samples = vae.decode(person_data[:, 12:16] / 0.18215).sample
     save_image(samples, "sample.png", nrow=4, normalize=True, value_range=(-1, 1))
