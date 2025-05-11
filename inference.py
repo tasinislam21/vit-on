@@ -1,14 +1,15 @@
 import torch
 import numpy as np
 import tqdm
-from model import DiT
+from models import DiT_models
 from test_dataloader import BaseDataset
 from diffusers import AutoencoderKL
 import torch.nn.functional as F
 from PIL import Image
-import itertools
 import torchvision.transforms as transforms
-
+from timm.models.vision_transformer import PatchEmbed
+from models import FinalLayer
+from torchvision.utils import save_image
 device = 'cuda'
 
 mean_candidate = [0.5, 0.5, 0.5]
@@ -53,29 +54,31 @@ posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 
 mseloss = torch.nn.MSELoss()
 
-checkpoint = torch.load("final.pt", map_location='cpu')
-model = DiT().to(device)
+model = DiT_models["DiT-XL/2"](
+        input_size=64,
+        num_classes=1000
+    ).to(device)
 model.eval()
-model.load_state_dict(checkpoint)
-vae = AutoencoderKL.from_pretrained(
-    "CompVis/stable-diffusion-v1-4",
-    subfolder="vae",
-    revision="ebb811dd71cdc38a204ecbdd6ac5d580f529fd8c"
-).to(device)
+model.x_embedder = PatchEmbed(64, 2, 16, 1152, bias=True).to(device)
+model.final_layer = FinalLayer(1152, 2, 4).to(device)
+model.out_channels = 4
+del model.y_embedder
+model.load_state_dict(torch.load("checkpoint/backup_460.pt")['ema'])
+vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-mse").to(device)
 vae.requires_grad_(False)
-vae_trainable_params = []
-for name, param in vae.named_parameters():
-    if 'decoder' in name:
-        param.requires_grad = True
-        vae_trainable_params.append(param)
+# vae_trainable_params = []
+# for name, param in vae.named_parameters():
+#     if 'decoder' in name:
+#         param.requires_grad = True
+#         vae_trainable_params.append(param)
 
-params_to_optimize = itertools.chain(vae_trainable_params)
-optimizer = torch.optim.AdamW(
-    params_to_optimize,
-    lr=5e-5,
-    betas=(0.9, 0.99),
-    weight_decay=1e-2,
-    eps=1e-08)
+# params_to_optimize = itertools.chain(vae_trainable_params)
+# optimizer = torch.optim.AdamW(
+#     params_to_optimize,
+#     lr=5e-5,
+#     betas=(0.9, 0.99),
+#     weight_decay=1e-2,
+#     eps=1e-08)
 
 train_dataset = BaseDataset()
 
@@ -114,12 +117,6 @@ def tensor2image(tensor):
     image_pil = Image.fromarray(tensor)
     return image_pil
 
-@torch.no_grad()
-def VAE_decode(latent):
-    latent = 1 / 0.18215 * latent
-    latent = vae.decode(latent).sample
-    latent = inv_normalize(latent).clamp(0, 1)
-    return latent
 
 for data in train_dataloader:
     input_person = data['input_person'].to(device)
@@ -127,23 +124,23 @@ for data in train_dataloader:
     input_clothing = data['input_clothing'].to(device)
     clip_clothing = data['clip_clothing'].to(device)
 
-    for vae_step in tqdm.tqdm(range(10)):
-        vae.train()
-        latents = vae.encode(input_person).latent_dist.sample()
-        latents_c = vae.encode(input_clothing).latent_dist.sample()
-        latents *= 0.18215
-        latents_c *= 0.18215
-        latents = 1 / 0.18215 * latents
-        latents_c = 1 / 0.18215 * latents_c
-        pred_images = vae.decode(latents).sample
-        pred_c = vae.decode(latents_c).sample
-        pred_images = pred_images.clamp(-1, 1)
-        pred_c = pred_c.clamp(-1, 1)
-        loss = F.mse_loss(pred_images.float(), input_person.clamp(-1, 1).float(), reduction="mean")
-        loss += F.mse_loss(pred_c.float(), input_clothing.clamp(-1, 1).float(), reduction="mean")
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    # for vae_step in tqdm.tqdm(range(10)):
+    #     vae.train()
+    #     latents = vae.encode(input_person).latent_dist.sample()
+    #     latents_c = vae.encode(input_clothing).latent_dist.sample()
+    #     latents *= 0.18215
+    #     latents_c *= 0.18215
+    #     latents = 1 / 0.18215 * latents
+    #     latents_c = 1 / 0.18215 * latents_c
+    #     pred_images = vae.decode(latents).sample
+    #     pred_c = vae.decode(latents_c).sample
+    #     pred_images = pred_images.clamp(-1, 1)
+    #     pred_c = pred_c.clamp(-1, 1)
+    #     loss = F.mse_loss(pred_images.float(), input_person.clamp(-1, 1).float(), reduction="mean")
+    #     loss += F.mse_loss(pred_c.float(), input_clothing.clamp(-1, 1).float(), reduction="mean")
+    #     optimizer.zero_grad()
+    #     loss.backward()
+    #     optimizer.step()
     vae.eval()
     encoded_person = vae.encode(input_person).latent_dist.sample() * 0.18215
     encoded_skeleton = vae.encode(input_skeleton).latent_dist.sample() * 0.18215
@@ -154,6 +151,5 @@ for data in train_dataloader:
         t = torch.full((1,), i, device=device).long()
         noise = sample_timestep(person_data, clip_clothing, t)
         person_data[:, 12:16] = noise
-    final_image = VAE_decode(person_data[:, 12:16])
-    jpg = tensor2image(final_image)
-    jpg.save('result/{}.jpg'.format(data['name'][0]))
+    samples = vae.decode(person_data[:, 12:16] / 0.18215).sample
+    save_image(samples, "sample.png", nrow=4, normalize=True, value_range=(-1, 1))
