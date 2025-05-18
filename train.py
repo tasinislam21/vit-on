@@ -120,13 +120,14 @@ def main(args):
     if get_rank() == 0:
         writer = SummaryWriter('runs')
 
-    def get_loss(input_person, gt):
+    def get_loss(input_person, input_clothing, clip_clothing, gt):
         b, _, _, _ = input_person.shape
         timesteps = torch.randint(0, T, (b,), device=device)
         timesteps = timesteps.long()
         x_noisy, noise = forward_diffusion_sample(gt, timesteps)
         input_person = torch.cat([input_person, x_noisy], dim=1)
-        noise_pred = model(input_person, timesteps.float())
+
+        noise_pred = model(input_person, input_clothing, clip_clothing, timesteps.float())
         loss = mseloss(noise_pred, noise)
         return loss
 
