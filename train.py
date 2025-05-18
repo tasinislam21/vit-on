@@ -81,7 +81,7 @@ def main(args):
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
     #checkpoints = torch.load("checkpoint/backup_70.pt", map_location="cpu")
-    model = DiT(input_size=args.latent_size, depth=8).to(device)
+    model = DiT(input_size=args.latent_size, depth=12).to(device)
     #model.load_state_dict(checkpoints["model"])
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     #ema.load_state_dict(checkpoints["ema"])
@@ -179,32 +179,33 @@ def main(args):
             update_ema(ema, model.module)
             if train_steps % 1000 == 0 and get_rank() == 0:
                 writer.add_scalar('loss', loss, train_steps)
-            if train_steps % 4000 == 0 and get_rank() == 0:
-                b, _, _, _ = encoded_person.shape
-                noise = torch.randn([b, 4, args.latent_size, args.latent_size]).to(device)
-                person_data = torch.cat([encoded_person, encoded_skeleton, noise], dim=1)
-                for i in range(0, T)[::-1]:
-                    t = torch.full((1,), i, device=device).long()
-                    noise = sample_timestep(person_data, clothing_data, clip_clothing, t)
-                    person_data[:,8:12] = noise
-                final_image = VAE_decode(person_data[:,8:12])
-                writer.add_image('Person', torchvision.utils.make_grid(inv_normalize(input_person)), train_steps)
-                writer.add_image('Clothing', torchvision.utils.make_grid(inv_normalize(input_clothing)), train_steps)
-                writer.add_image('Fused', torchvision.utils.make_grid(inv_normalize(final_image)), train_steps)
             train_steps += 1
         if get_rank() == 0 and epoch % 20 == 0:
-            checkpoint = {
+            checkpoint = { # Make checkpoint
                 "model": model.module.state_dict(),
                 "ema": ema.state_dict(),
                 "opt": opt.state_dict(),
                 "args": args
             }
             torch.save(checkpoint, 'checkpoint/backup_{}.pt'.format(str(epoch)))
+
+            b, _, _, _ = encoded_person.shape  # Also save some image samples
+            noise = torch.randn([b, 4, args.latent_size, args.latent_size]).to(device)
+            person_data = torch.cat([encoded_person, encoded_skeleton, noise], dim=1)
+            for i in range(0, T)[::-1]:
+                t = torch.full((1,), i, device=device).long()
+                noise = sample_timestep(person_data, clothing_data, clip_clothing, t)
+                person_data[:, 8:12] = noise
+            final_image = VAE_decode(person_data[:, 8:12])
+            writer.add_image('Person', torchvision.utils.make_grid(inv_normalize(input_person)), train_steps)
+            writer.add_image('Clothing', torchvision.utils.make_grid(inv_normalize(input_clothing)), train_steps)
+            writer.add_image('Fused', torchvision.utils.make_grid(inv_normalize(final_image)), train_steps)
+
     torch.save(ema.state_dict(), 'checkpoint/final.pt')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--global-batch-size", type=int, default=16)
+    parser.add_argument("--global-batch-size", type=int, default=8)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--latent-size", type=int, default=64)
     args = parser.parse_args()
