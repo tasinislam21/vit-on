@@ -38,19 +38,25 @@ class BaseDataset(data.Dataset):
         self.transform_skeleton = get_transform(mean=mean_skeleton, std=std_skeleton)
         self.m = torch.nn.ZeroPad2d((64, 64, 0, 0))
         self.dataset_path = 'dataset_test'
+        self.human_names = []
+        self.cloth_names = []
+        with open('dataset_test/pair.txt', 'r') as f:
+            for line in f.readlines():
+                h_name, c_name = line.strip().split()
+                self.human_names.append(h_name)
+                self.cloth_names.append(c_name)
 
     def __getitem__(self, index):
-        name = self.name_list[index]
-        A_path = osp.join(self.dataset_path, 'image', name)
-        gt = Image.open(A_path).convert('RGB')
+        h_name = self.human_names[index]
+        c_name = self.cloth_names[index]
 
-        S_path = osp.join(self.dataset_path, 'image-densepose', name)
+        S_path = osp.join(self.dataset_path, 'image-densepose', h_name)
         skeleton = Image.open(S_path).convert('RGB')
 
-        C_path = osp.join(self.dataset_path, 'cloth', name)
+        C_path = osp.join(self.dataset_path, 'cloth', c_name)
         color = Image.open(C_path).convert('RGB')
 
-        D_path = osp.join(self.dataset_path, 'agnostic-v3.2', name)
+        D_path = osp.join(self.dataset_path, 'agnostic-v3.2', h_name)
         agnostic_img = Image.open(D_path).convert('RGB')
 
         clothing = self.m(self.transform_clothes(color))
@@ -61,7 +67,7 @@ class BaseDataset(data.Dataset):
         clip_clothing = {k: v for k, v in clip_clothing.items()}
         clip_clothing = clip_encoder(**clip_clothing).last_hidden_state
 
-        return {'name':name,
+        return {'name':h_name,
                 'input_person': agnostic,
                 'input_skeleton': skeleton,
                 'input_clothing': clothing,

@@ -4,3 +4,5 @@
 *.zip
 *.ipynb
 /base
+/checkpoint
+/dataset*

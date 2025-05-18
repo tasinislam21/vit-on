@@ -42,7 +42,7 @@ def forward_diffusion_sample(x_0, t):
     return sqrt_alphas_cumprod_t.to(t.device) * x_0.to(t.device) \
            + sqrt_one_minus_alphas_cumprod_t.to(t.device) * noise.to(t.device), noise.to(t.device)
 
-T = 100
+T = 250
 betas = cosine_beta_schedule(timesteps=T)
 alphas = 1. - betas
 alphas_cumprod = torch.cumprod(alphas, axis=0)
@@ -63,7 +63,7 @@ model.x_embedder = PatchEmbed(64, 2, 16, 1152, bias=True).to(device)
 model.final_layer = FinalLayer(1152, 2, 4).to(device)
 model.out_channels = 4
 del model.y_embedder
-model.load_state_dict(torch.load("checkpoint/backup_460.pt", weights_only=False)['ema'])
+model.load_state_dict(torch.load("checkpoint/last.pt", weights_only=False))
 vae = AutoencoderKL.from_pretrained(f"stabilityai/sd-vae-ft-mse").to(device)
 vae.requires_grad_(False)
 # vae_trainable_params = []
@@ -152,3 +152,4 @@ for data in train_dataloader:
         person_data[:, 12:16] = noise
     samples = vae.decode(person_data[:, 12:16] / 0.18215).sample
     save_image(samples, "sample.png", nrow=4, normalize=True, value_range=(-1, 1))
+    break
