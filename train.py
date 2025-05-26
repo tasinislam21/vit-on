@@ -198,7 +198,7 @@ def main(args):
             person_data = torch.cat([encoded_person, encoded_skeleton, noise], dim=1)
             for i in range(0, T)[::-1]:
                 t = torch.full((1,), i, device=device).long()
-                noise = sample_timestep(person_data, clip_clothing, clip_clothing, t)
+                noise = sample_timestep(person_data, encoded_clothing, clip_clothing, t)
                 person_data[:, 8:12] = noise
             final_image = VAE_decode(person_data[:, 8:12])
             writer.add_image('Person', torchvision.utils.make_grid(inv_normalize(input_person)), train_steps)
