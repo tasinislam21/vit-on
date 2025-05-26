@@ -198,7 +198,7 @@ class DiT(nn.Module):
             input_size=64,
             patch_size=2,
             person_channels=12,  # noise + person + skeleton
-            garment_channels=8, # cloth + skeleton
+            garment_channels=4, # cloth
             hidden_size=768,
             depth=8,
             num_heads=16,
@@ -221,20 +221,11 @@ class DiT(nn.Module):
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
-
         self.person_blocks = nn.ModuleList([
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
-
-        self.garment_blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
-        ])
-
-        self.ca_blocks = nn.ModuleList([
-            AttentionBlock(8, 128) for _ in range(depth)
-        ])
-
-        self.clip_blocks = nn.ModuleList([
+        self.ca_clip = AttentionBlock(8, 128)
+        self.ca_blocks = nn.ModuleList([    # semantic correspondence
             AttentionBlock(8, 128) for _ in range(depth)
         ])
 
@@ -279,10 +270,6 @@ class DiT(nn.Module):
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
-        for block in self.garment_blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
-
         # Zero-out output layers:
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
@@ -313,11 +300,10 @@ class DiT(nn.Module):
         person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         garment = self.garment_embedder(garment)
         t = self.t_embedder(t)  # (N, D)
-        for person_block, garment_block, ca_block, clip_block in zip(self.person_blocks, self.garment_blocks, self.ca_blocks, self.clip_blocks):
+        garment = self.ca_clip(garment, clip_garment) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
+        for person_block, ca_block in zip(self.person_blocks, self.ca_blocks):
             person = person_block(person, t)
-            garment = garment_block(garment, t)
-            garment = clip_block(garment, clip_garment)
-            person = ca_block(person, garment)
+            person = ca_block(person, garment) # forces to learn semantic correspondence
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
         person = self.unpatchify(person)  # (N, out_channels, H, W)
         return person

@@ -15,9 +15,12 @@ import torchvision.transforms as transforms
 from models import DiT
 from train_dataloader import BaseDataset
 import torchvision
+import kornia.augmentation as K
 
 mean_candidate = [0.74112587, 0.69617281, 0.68865463]
 std_candidate = [0.2941623, 0.30806473, 0.30613222]
+
+augment = K.RandomAffine(degrees=15, translate=(0.1, 0.1), p=1.0)
 
 inv_normalize = transforms.Normalize(
     mean=[-m/s for m, s in zip(mean_candidate, std_candidate)],
@@ -60,7 +63,7 @@ def forward_diffusion_sample(x_0, t):
     return sqrt_alphas_cumprod_t.to(t.device) * x_0.to(t.device) \
     + sqrt_one_minus_alphas_cumprod_t.to(t.device) * noise.to(t.device), noise.to(t.device)
 
-T = 250
+T = 1000
 betas = cosine_beta_schedule(timesteps=T)
 alphas = 1. - betas
 alphas_cumprod = torch.cumprod(alphas, axis=0)
@@ -81,7 +84,7 @@ def main(args):
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
     #checkpoints = torch.load("checkpoint/backup_70.pt", map_location="cpu")
-    model = DiT(input_size=args.latent_size, depth=12).to(device)
+    model = DiT(input_size=args.latent_size, depth=16).to(device)
     #model.load_state_dict(checkpoints["model"])
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     #ema.load_state_dict(checkpoints["ema"])
@@ -169,11 +172,11 @@ def main(args):
             encoded_person = vae.encode(input_person).latent_dist.sample() * 0.18215
             encoded_skeleton = vae.encode(input_skeleton).latent_dist.sample() * 0.18215
             encoded_clothing = vae.encode(input_clothing).latent_dist.sample() * 0.18215
+            encoded_clothing = augment(encoded_clothing)
             encoded_gt = vae.encode(gt).latent_dist.sample() * 0.18215
 
             person_data = torch.cat([encoded_person, encoded_skeleton], dim=1)
-            clothing_data = torch.cat([encoded_clothing, encoded_skeleton], dim=1)
-            loss = get_loss(input_person=person_data, input_clothing=clothing_data, clip_clothing=clip_clothing, gt=encoded_gt)
+            loss = get_loss(input_person=person_data, input_clothing=encoded_clothing, clip_clothing=clip_clothing, gt=encoded_gt)
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -195,7 +198,7 @@ def main(args):
             person_data = torch.cat([encoded_person, encoded_skeleton, noise], dim=1)
             for i in range(0, T)[::-1]:
                 t = torch.full((1,), i, device=device).long()
-                noise = sample_timestep(person_data, clothing_data, clip_clothing, t)
+                noise = sample_timestep(person_data, clip_clothing, clip_clothing, t)
                 person_data[:, 8:12] = noise
             final_image = VAE_decode(person_data[:, 8:12])
             writer.add_image('Person', torchvision.utils.make_grid(inv_normalize(input_person)), train_steps)
