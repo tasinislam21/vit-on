@@ -12,7 +12,7 @@ from copy import deepcopy
 from collections import OrderedDict
 from tensorboardX import SummaryWriter
 import torchvision.transforms as transforms
-from models import DiT
+from models import DiT_step2
 from train_dataloader import BaseDataset
 import torchvision
 import kornia.augmentation as K
