@@ -195,7 +195,6 @@ def main(args):
                 person_data[:, 8:12] = noise
             final_image = VAE_decode(person_data[:, 8:12])
             writer.add_image('Person', torchvision.utils.make_grid(inv_normalize(input_person)), train_steps)
-            writer.add_image('Clothing', torchvision.utils.make_grid(inv_normalize(input_clothing)), train_steps)
             writer.add_image('Fused', torchvision.utils.make_grid(inv_normalize(final_image)), train_steps)
 
     torch.save(ema.state_dict(), 'checkpoint/final.pt')
