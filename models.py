@@ -192,7 +192,105 @@ class Embedding_Adapter(nn.Module):
 
 mlist = nn.ModuleList
 
-class DiT(nn.Module):
+class DiT_step1(nn.Module):
+    def __init__(
+            self,
+            input_size=64,
+            patch_size=2,
+            person_channels=12,  # noise + person + skeleton
+            hidden_size=768,
+            depth=8,
+            num_heads=16,
+            mlp_ratio=4.0,
+            learn_sigma=True,
+    ):
+        super().__init__()
+        self.learn_sigma = learn_sigma
+        self.person_channels = person_channels
+        self.out_channels = 4
+        self.patch_size = patch_size
+        self.num_heads = num_heads
+
+        self.person_embedder = PatchEmbed(input_size, patch_size, person_channels, hidden_size, bias=True)
+
+        self.t_embedder = TimestepEmbedder(hidden_size)
+        num_patches = self.person_embedder.num_patches
+        # Will use fixed sin-cos embedding:
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
+
+        self.person_blocks = nn.ModuleList([
+            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+        ])
+   
+        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
+        self.initialize_weights()
+
+    def initialize_weights(self):
+        # Initialize transformer layers:
+        def _basic_init(module):
+            if isinstance(module, nn.Linear):
+                torch.nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+        self.apply(_basic_init)
+
+        # Initialize (and freeze) pos_embed by sin-cos embedding:
+        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.person_embedder.num_patches ** 0.5))
+        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
+
+        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
+        w = self.person_embedder.proj.weight.data
+        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        nn.init.constant_(self.person_embedder.proj.bias, 0)
+
+        # Initialize label embedding table:
+
+        # Initialize timestep embedding MLP:
+        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
+        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
+
+        # Zero-out adaLN modulation layers in DiT blocks:
+        for block in self.person_blocks:
+            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
+            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
+
+        # Zero-out output layers:
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
+        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
+        nn.init.constant_(self.final_layer.linear.weight, 0)
+        nn.init.constant_(self.final_layer.linear.bias, 0)
+
+    def unpatchify(self, x):
+        """
+        x: (N, T, patch_size**2 * C)
+        imgs: (N, H, W, C)
+        """
+        c = self.out_channels
+        p = self.person_embedder.patch_size[0]
+        h = w = int(x.shape[1] ** 0.5)
+        assert h * w == x.shape[1]
+
+        x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
+        x = torch.einsum('nhwpqc->nchpwq', x)
+        imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
+        return imgs
+
+    def forward(self, person, t):
+        """
+        Forward pass of DiT.
+        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
+        t: (N,) tensor of diffusion timesteps
+        """
+        person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
+        t = self.t_embedder(t)  # (N, D)
+        for person_block in self.person_blocks:
+            person = person_block(person, t)
+        person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
+        person = self.unpatchify(person)  # (N, out_channels, H, W)
+        return person
+
+class DiT_step2(nn.Module):
     def __init__(
             self,
             input_size=64,
@@ -304,104 +402,6 @@ class DiT(nn.Module):
         for person_block, ca_block in zip(self.person_blocks, self.ca_blocks):
             person = person_block(person, t)
             person = ca_block(person, garment) # forces to learn semantic correspondence
-        person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
-        person = self.unpatchify(person)  # (N, out_channels, H, W)
-        return person
-
-class DiT_step1(nn.Module):
-    def __init__(
-            self,
-            input_size=64,
-            patch_size=2,
-            person_channels=12,  # noise + person + skeleton
-            hidden_size=768,
-            depth=8,
-            num_heads=16,
-            mlp_ratio=4.0,
-            learn_sigma=True,
-    ):
-        super().__init__()
-        self.learn_sigma = learn_sigma
-        self.person_channels = person_channels
-        self.out_channels = 4
-        self.patch_size = patch_size
-        self.num_heads = num_heads
-
-        self.person_embedder = PatchEmbed(input_size, patch_size, person_channels, hidden_size, bias=True)
-
-        self.t_embedder = TimestepEmbedder(hidden_size)
-        num_patches = self.person_embedder.num_patches
-        # Will use fixed sin-cos embedding:
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
-
-        self.person_blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
-        ])
-   
-        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        # Initialize transformer layers:
-        def _basic_init(module):
-            if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-
-        self.apply(_basic_init)
-
-        # Initialize (and freeze) pos_embed by sin-cos embedding:
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.person_embedder.num_patches ** 0.5))
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        w = self.person_embedder.proj.weight.data
-        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-        nn.init.constant_(self.person_embedder.proj.bias, 0)
-
-        # Initialize label embedding table:
-
-        # Initialize timestep embedding MLP:
-        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
-        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
-
-        # Zero-out adaLN modulation layers in DiT blocks:
-        for block in self.person_blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
-
-        # Zero-out output layers:
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-        nn.init.constant_(self.final_layer.linear.weight, 0)
-        nn.init.constant_(self.final_layer.linear.bias, 0)
-
-    def unpatchify(self, x):
-        """
-        x: (N, T, patch_size**2 * C)
-        imgs: (N, H, W, C)
-        """
-        c = self.out_channels
-        p = self.person_embedder.patch_size[0]
-        h = w = int(x.shape[1] ** 0.5)
-        assert h * w == x.shape[1]
-
-        x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
-        x = torch.einsum('nhwpqc->nchpwq', x)
-        imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
-        return imgs
-
-    def forward(self, person, t):
-        """
-        Forward pass of DiT.
-        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
-        t: (N,) tensor of diffusion timesteps
-        """
-        person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        t = self.t_embedder(t)  # (N, D)
-        for person_block in self.person_blocks:
-            person = person_block(person, t)
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
         person = self.unpatchify(person)  # (N, out_channels, H, W)
         return person
