@@ -401,7 +401,7 @@ class DiT_step2(nn.Module):
         garment = self.ca_clip(garment, clip_garment) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
         for person_block, ca_block in zip(self.person_blocks, self.ca_blocks):
             person = person_block(person, t)
-            person = ca_block(person, garment) # forces to learn semantic correspondence
+            person = ca_block(garment, person) # forces to learn semantic correspondence
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
         person = self.unpatchify(person)  # (N, out_channels, H, W)
         return person
