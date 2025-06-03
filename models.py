@@ -323,10 +323,7 @@ class DiT_step2(nn.Module):
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         self.ca_clip = AttentionBlock(8, 128)
-        self.ca_blocks = nn.ModuleList([    # semantic correspondence
-            AttentionBlock(8, 128) for _ in range(depth)
-        ])
-
+        self.ca_block = AttentionBlock(8, 128)  # semantic correspondence
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
@@ -399,9 +396,9 @@ class DiT_step2(nn.Module):
         garment = self.garment_embedder(garment)
         t = self.t_embedder(t)  # (N, D)
         garment = self.ca_clip(garment, clip_garment) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
-        for person_block, ca_block in zip(self.person_blocks, self.ca_blocks):
+        person = self.ca_block(person, garment)  # forces to learn semantic correspondence
+        for person_block in self.person_blocks:
             person = person_block(person, t)
-            person = ca_block(garment, person) # forces to learn semantic correspondence
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
         person = self.unpatchify(person)  # (N, out_channels, H, W)
         return person
