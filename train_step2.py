@@ -12,7 +12,7 @@ from copy import deepcopy
 from collections import OrderedDict
 from tensorboardX import SummaryWriter
 import torchvision.transforms as transforms
-from models import DiT_step2
+from models import DiT_step2_v2
 from train_dataloader import BaseDataset
 import torchvision
 import kornia.augmentation as K
@@ -84,14 +84,14 @@ def main(args):
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
     checkpoint = torch.load("checkpoint/part1.pt", map_location="cpu")
-    model = DiT_step2(input_size=args.latent_size, depth=16).to(device)
+    model = DiT_step2_v2(input_size=args.latent_size, depth=16).to(device)
     model.load_state_dict(checkpoint, strict=False)
-    #for param in model.parameters():
-    #    param.requires_grad = False
-    #for name, layer in model.named_children():
-    #    if name in ['garment_embedder', 'ca_clip', 'ca_blocks']:
-    #        for param in layer.parameters():
-    #            param.requires_grad = True
+    for param in model.parameters():
+        param.requires_grad = False
+    for name, layer in model.named_children():
+        if name in ['garment_embedder', 'ca_clip', 'ca_blocks']:
+            for param in layer.parameters():
+                param.requires_grad = True
 
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     #ema.load_state_dict(checkpoints["ema"])
@@ -105,9 +105,9 @@ def main(args):
     ).to(device)
     vae.requires_grad_(False)
 
-    #params = filter(lambda p: p.requires_grad, model.parameters())
-    #opt = torch.optim.AdamW(params, lr=1e-4, weight_decay=0)
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    params = filter(lambda p: p.requires_grad, model.parameters())
+    opt = torch.optim.AdamW(params, lr=1e-4, weight_decay=0)
+    #opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
     train_dataset = BaseDataset()
     sampler = DistributedSampler(
         train_dataset,
@@ -122,7 +122,6 @@ def main(args):
         sampler=sampler,
         num_workers=4,
         drop_last=False)
-
     update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()
     ema.eval()
@@ -209,9 +208,9 @@ def main(args):
                 noise = sample_timestep(person_data, encoded_clothing, clip_clothing, t)
                 person_data[:, 8:12] = noise
             final_image = VAE_decode(person_data[:, 8:12])
-            writer.add_image('Person', torchvision.utils.make_grid(inv_normalize(input_person)), train_steps)
-            writer.add_image('Clothing', torchvision.utils.make_grid(inv_normalize(input_clothing)), train_steps)
             writer.add_image('Fused', torchvision.utils.make_grid(inv_normalize(final_image)), train_steps)
+            writer.add_image('Person', torchvision.utils.make_grid(inv_normalize(gt)), train_steps)
+            writer.add_image('Clothing', torchvision.utils.make_grid(inv_normalize(input_clothing)), train_steps)
 
     torch.save(ema.state_dict(), 'checkpoint/final.pt')
 
