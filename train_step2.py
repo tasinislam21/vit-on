@@ -83,15 +83,15 @@ def main(args):
     seed = args.global_seed * dist.get_world_size() + rank
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
-    checkpoint = torch.load("checkpoint/part1.pt", map_location="cpu")
+    #checkpoint = torch.load("checkpoint/part1.pt", map_location="cpu")
     model = DiT_v2(input_size=args.latent_size, depth=16).to(device)
-    model.load_state_dict(checkpoint, strict=False)
-    for param in model.parameters():
-        param.requires_grad = False
-    for name, layer in model.named_children():
-        if name in ['garment_embedder', 'ca_clip', 'ca_blocks']:
-            for param in layer.parameters():
-                param.requires_grad = True
+    #model.load_state_dict(checkpoint, strict=False)
+    #for param in model.parameters():
+    #    param.requires_grad = False
+    #for name, layer in model.named_children():
+    #    if name in ['garment_embedder', 'ca_clip', 'ca_blocks']:
+    #        for param in layer.parameters():
+    #            param.requires_grad = True
 
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     #ema.load_state_dict(checkpoints["ema"])
@@ -105,9 +105,9 @@ def main(args):
     ).to(device)
     vae.requires_grad_(False)
 
-    params = filter(lambda p: p.requires_grad, model.parameters())
-    opt = torch.optim.AdamW(params, lr=1e-4, weight_decay=0)
-    #opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    #params = filter(lambda p: p.requires_grad, model.parameters())
+    #opt = torch.optim.AdamW(params, lr=1e-4, weight_decay=0)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
     train_dataset = BaseDataset()
     sampler = DistributedSampler(
         train_dataset,
