@@ -65,7 +65,10 @@ class AttentionBlock(nn.Module):
         self.linear_geglu_1  = nn.Linear(channels, 4 * channels * 2)
         self.linear_geglu_2 = nn.Linear(4 * channels, channels)
 
-    def forward(self, x, context):
+    def forward(self, x, context, t):
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(t).chunk(6, dim=1)
+        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
+        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
         x = rearrange(x, 'b c t -> b t c')
         residue_short = x
         x = self.layernorm_2(x)
@@ -79,6 +82,7 @@ class AttentionBlock(nn.Module):
         x = self.linear_geglu_2(x)
         x += residue_short
         x = rearrange(x, 'b t c -> b c t')
+
         return x
 
 class CrossAttention(nn.Module):
@@ -403,7 +407,7 @@ class DiT_step2(nn.Module):
         person = self.unpatchify(person)  # (N, out_channels, H, W)
         return person
 
-class DiT_step2_v2(nn.Module):
+class DiT_v2(nn.Module):
     def __init__(
             self,
             input_size=64,
@@ -433,13 +437,9 @@ class DiT_step2_v2(nn.Module):
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
         self.person_blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
-        ])
-        self.ca_clip = AttentionBlock(8, 128)
-        self.ca_blocks = nn.ModuleList([
             AttentionBlock(8, 128) for _ in range(depth)
         ])
-
+        self.ca_clip = AttentionBlock(8, 128)
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
@@ -476,11 +476,6 @@ class DiT_step2_v2(nn.Module):
         nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
-        # Zero-out adaLN modulation layers in DiT blocks:
-        for block in self.person_blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
-
         # Zero-out output layers:
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
         nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
@@ -511,11 +506,9 @@ class DiT_step2_v2(nn.Module):
         person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         garment = self.garment_embedder(garment)
         t = self.t_embedder(t)  # (N, D)
-        for person_block in self.person_blocks:
-            person = person_block(person, t)
-        garment = self.ca_clip(garment, clip_garment) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
-        for ca_block in self.ca_blocks:
-            person = ca_block(person, garment)  # forces to learn semantic correspondence
+        garment = self.ca_clip(garment, clip_garment, t) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
+        for person_block in self.person_blocks: # forces to learn semantic correspondence
+            person = person_block(person, garment, t)
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
         person = self.unpatchify(person)  # (N, out_channels, H, W)
         return person
