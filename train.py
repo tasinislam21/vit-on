@@ -12,7 +12,7 @@ from copy import deepcopy
 from collections import OrderedDict
 from tensorboardX import SummaryWriter
 import torchvision.transforms as transforms
-from models import DiT_v2
+from models import DiT
 from train_dataloader import BaseDataset
 import torchvision
 import kornia.augmentation as K
@@ -84,7 +84,7 @@ def main(args):
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
     #checkpoint = torch.load("checkpoint/part1.pt", map_location="cpu")
-    model = DiT_v2(input_size=args.latent_size, depth=16).to(device)
+    model = DiT(input_size=args.latent_size, depth=16).to(device)
     #model.load_state_dict(checkpoint, strict=False)
     #for param in model.parameters():
     #    param.requires_grad = False
