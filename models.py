@@ -138,10 +138,10 @@ class DiTBlock(nn.Module):
         modulated_person = modulate(self.norm1(person), shift_msa, scale_msa)
         modulated_clothing = modulate(self.norm1(clothing), shift_msa, scale_msa)
         modulated_clothing = rearrange(modulated_clothing, 'b c t -> b t c')
-        person_temp =  self.attn(modulated_clothing, modulated_person)
-        person += rearrange(person_temp, 'b t c -> b c t')
-        person *= gate_msa.unsqueeze(1)
-        person += gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(person), shift_mlp, scale_mlp))
+        person_temp = self.attn(modulated_clothing, modulated_person)
+        person = person + rearrange(person_temp, 'b t c -> b c t')
+        person = person * gate_msa.unsqueeze(1)
+        person = person + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(person), shift_mlp, scale_mlp))
         return person
 
 class TimestepEmbedder(nn.Module):
