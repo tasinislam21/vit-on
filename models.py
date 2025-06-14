@@ -64,11 +64,12 @@ class AttentionBlock(nn.Module):
         self.layernorm_3 = nn.LayerNorm(channels)
         self.linear_geglu_1  = nn.Linear(channels, 4 * channels * 2)
         self.linear_geglu_2 = nn.Linear(4 * channels, channels)
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(n_embd, 6 * n_embd, bias=True)
+        )
 
-    def forward(self, x, context, t):
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(t).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
+    def forward(self, x, context):
         x = rearrange(x, 'b c t -> b t c')
         residue_short = x
         x = self.layernorm_2(x)
@@ -119,10 +120,10 @@ class CrossAttention(nn.Module):
         return output
 
 class DiTBlock(nn.Module):
-    def __init__(self, hidden_size, num_heads, mlp_ratio=4.0, **block_kwargs):
+    def __init__(self, hidden_size = 768, num_head = 8, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = Attention(hidden_size, num_heads=num_heads, qkv_bias=True, **block_kwargs)
+        self.attn = CrossAttention(num_head, 1024, 768, in_proj_bias=False)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
@@ -132,11 +133,16 @@ class DiTBlock(nn.Module):
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
-    def forward(self, x, c):
+    def forward(self, person, clothing, c):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        x = x + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(x), shift_msa, scale_msa))
-        x = x + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(x), shift_mlp, scale_mlp))
-        return x
+        modulated_person = modulate(self.norm1(person), shift_msa, scale_msa)
+        modulated_clothing = modulate(self.norm1(clothing), shift_msa, scale_msa)
+        modulated_clothing = rearrange(modulated_clothing, 'b c t -> b t c')
+        person_temp =  self.attn(modulated_clothing, modulated_person)
+        person += rearrange(person_temp, 'b t c -> b c t')
+        person *= gate_msa.unsqueeze(1)
+        person += gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(person), shift_mlp, scale_mlp))
+        return person
 
 class TimestepEmbedder(nn.Module):
     def __init__(self, hidden_size, frequency_embedding_size=256):
@@ -196,105 +202,7 @@ class Embedding_Adapter(nn.Module):
 
 mlist = nn.ModuleList
 
-class DiT_step1(nn.Module):
-    def __init__(
-            self,
-            input_size=64,
-            patch_size=2,
-            person_channels=12,  # noise + person + skeleton
-            hidden_size=768,
-            depth=8,
-            num_heads=16,
-            mlp_ratio=4.0,
-            learn_sigma=True,
-    ):
-        super().__init__()
-        self.learn_sigma = learn_sigma
-        self.person_channels = person_channels
-        self.out_channels = 4
-        self.patch_size = patch_size
-        self.num_heads = num_heads
-
-        self.person_embedder = PatchEmbed(input_size, patch_size, person_channels, hidden_size, bias=True)
-
-        self.t_embedder = TimestepEmbedder(hidden_size)
-        num_patches = self.person_embedder.num_patches
-        # Will use fixed sin-cos embedding:
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
-
-        self.person_blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
-        ])
-   
-        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        # Initialize transformer layers:
-        def _basic_init(module):
-            if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-
-        self.apply(_basic_init)
-
-        # Initialize (and freeze) pos_embed by sin-cos embedding:
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.person_embedder.num_patches ** 0.5))
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        w = self.person_embedder.proj.weight.data
-        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-        nn.init.constant_(self.person_embedder.proj.bias, 0)
-
-        # Initialize label embedding table:
-
-        # Initialize timestep embedding MLP:
-        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
-        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
-
-        # Zero-out adaLN modulation layers in DiT blocks:
-        for block in self.person_blocks:
-            nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
-            nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
-
-        # Zero-out output layers:
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-        nn.init.constant_(self.final_layer.linear.weight, 0)
-        nn.init.constant_(self.final_layer.linear.bias, 0)
-
-    def unpatchify(self, x):
-        """
-        x: (N, T, patch_size**2 * C)
-        imgs: (N, H, W, C)
-        """
-        c = self.out_channels
-        p = self.person_embedder.patch_size[0]
-        h = w = int(x.shape[1] ** 0.5)
-        assert h * w == x.shape[1]
-
-        x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
-        x = torch.einsum('nhwpqc->nchpwq', x)
-        imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
-        return imgs
-
-    def forward(self, person, t):
-        """
-        Forward pass of DiT.
-        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
-        t: (N,) tensor of diffusion timesteps
-        """
-        person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        t = self.t_embedder(t)  # (N, D)
-        for person_block in self.person_blocks:
-            person = person_block(person, t)
-        person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
-        person = self.unpatchify(person)  # (N, out_channels, H, W)
-        return person
-
-class DiT_step2(nn.Module):
+class DiT(nn.Module):
     def __init__(
             self,
             input_size=64,
@@ -323,11 +231,10 @@ class DiT_step2(nn.Module):
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
-        self.person_blocks = nn.ModuleList([
-            DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
+        self.person_blocks = nn.ModuleList([ # DiT block with semantic correspondence
+            DiTBlock(mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         self.ca_clip = AttentionBlock(8, 128)
-        self.ca_block = AttentionBlock(8, 128)  # semantic correspondence
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
@@ -400,114 +307,7 @@ class DiT_step2(nn.Module):
         garment = self.garment_embedder(garment)
         t = self.t_embedder(t)  # (N, D)
         garment = self.ca_clip(garment, clip_garment) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
-        person = self.ca_block(person, garment)  # forces to learn semantic correspondence
         for person_block in self.person_blocks:
-            person = person_block(person, t)
-        person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
-        person = self.unpatchify(person)  # (N, out_channels, H, W)
-        return person
-
-class DiT_v2(nn.Module):
-    def __init__(
-            self,
-            input_size=64,
-            patch_size=2,
-            person_channels=12,  # noise + person + skeleton
-            garment_channels=4, # cloth
-            hidden_size=768,
-            depth=8,
-            num_heads=16,
-            mlp_ratio=4.0,
-            learn_sigma=True,
-    ):
-        super().__init__()
-        self.learn_sigma = learn_sigma
-        self.person_channels = person_channels
-        self.garment_channels = garment_channels
-        self.out_channels = 4
-        self.patch_size = patch_size
-        self.num_heads = num_heads
-
-        self.person_embedder = PatchEmbed(input_size, patch_size, person_channels, hidden_size, bias=True)
-        self.garment_embedder = PatchEmbed(input_size, patch_size, garment_channels, hidden_size, bias=True)
-
-        self.t_embedder = TimestepEmbedder(hidden_size)
-        num_patches = self.person_embedder.num_patches
-        # Will use fixed sin-cos embedding:
-        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
-
-        self.person_blocks = nn.ModuleList([
-            AttentionBlock(8, 128) for _ in range(depth)
-        ])
-        self.ca_clip = AttentionBlock(8, 128)
-        self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
-        self.initialize_weights()
-
-    def initialize_weights(self):
-        # Initialize transformer layers:
-        def _basic_init(module):
-            if isinstance(module, nn.Linear):
-                torch.nn.init.xavier_uniform_(module.weight)
-                if module.bias is not None:
-                    nn.init.constant_(module.bias, 0)
-
-        self.apply(_basic_init)
-
-        # Initialize (and freeze) pos_embed by sin-cos embedding:
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.person_embedder.num_patches ** 0.5))
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        w = self.person_embedder.proj.weight.data
-        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-        nn.init.constant_(self.person_embedder.proj.bias, 0)
-
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.garment_embedder.num_patches ** 0.5))
-        self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        w = self.garment_embedder.proj.weight.data
-        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-        nn.init.constant_(self.garment_embedder.proj.bias, 0)
-
-        # Initialize label embedding table:
-
-        # Initialize timestep embedding MLP:
-        nn.init.normal_(self.t_embedder.mlp[0].weight, std=0.02)
-        nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
-
-        # Zero-out output layers:
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].weight, 0)
-        nn.init.constant_(self.final_layer.adaLN_modulation[-1].bias, 0)
-        nn.init.constant_(self.final_layer.linear.weight, 0)
-        nn.init.constant_(self.final_layer.linear.bias, 0)
-
-    def unpatchify(self, x):
-        """
-        x: (N, T, patch_size**2 * C)
-        imgs: (N, H, W, C)
-        """
-        c = self.out_channels
-        p = self.person_embedder.patch_size[0]
-        h = w = int(x.shape[1] ** 0.5)
-        assert h * w == x.shape[1]
-
-        x = x.reshape(shape=(x.shape[0], h, w, p, p, c))
-        x = torch.einsum('nhwpqc->nchpwq', x)
-        imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
-        return imgs
-
-    def forward(self, person, garment, clip_garment, t):
-        """
-        Forward pass of DiT.
-        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
-        t: (N,) tensor of diffusion timesteps
-        """
-        person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        garment = self.garment_embedder(garment)
-        t = self.t_embedder(t)  # (N, D)
-        garment = self.ca_clip(garment, clip_garment, t) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
-        for person_block in self.person_blocks: # forces to learn semantic correspondence
             person = person_block(person, garment, t)
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
         person = self.unpatchify(person)  # (N, out_channels, H, W)
