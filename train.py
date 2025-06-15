@@ -83,7 +83,7 @@ def main(args):
     seed = args.global_seed * dist.get_world_size() + rank
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
-    model = DiT(input_size=args.latent_size, depth=16).to(device)
+    model = DiT(input_size=args.latent_size, depth=24).to(device)
 
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
