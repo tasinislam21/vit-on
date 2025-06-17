@@ -119,7 +119,8 @@ class DiTBlock(nn.Module):
     def __init__(self, hidden_size = 768, num_head = 8, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.attn = CrossAttention(num_head, 1024, 768, in_proj_bias=False)
+        self.attn = Attention(hidden_size, num_heads=16, qkv_bias=True, **block_kwargs)
+        self.ca_attn = CrossAttention(num_head, 1024, 768, in_proj_bias=False)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
@@ -132,9 +133,10 @@ class DiTBlock(nn.Module):
     def forward(self, person, clothing, c):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         modulated_person = modulate(self.norm1(person), shift_msa, scale_msa)
+        modulated_person = modulated_person + gate_msa.unsqueeze(1) * self.attn(modulated_person)
         modulated_clothing = modulate(self.norm1(clothing), shift_msa, scale_msa)
         modulated_clothing = rearrange(modulated_clothing, 'b c t -> b t c')
-        person = person + rearrange(self.attn(modulated_clothing, modulated_person), 'b t c -> b c t')
+        person = person + rearrange(self.ca_attn(modulated_clothing, modulated_person), 'b t c -> b c t')
         person = person * gate_msa.unsqueeze(1)
         person = person + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(person), shift_mlp, scale_mlp))
         return person
