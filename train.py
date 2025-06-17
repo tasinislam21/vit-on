@@ -83,7 +83,7 @@ def main(args):
     seed = args.global_seed * dist.get_world_size() + rank
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
-    model = DiT(input_size=args.latent_size, depth=24).to(device)
+    model = DiT(input_size=args.latent_size, depth=args.model_depth).to(device)
 
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     requires_grad(ema, False)
@@ -206,6 +206,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--global-batch-size", type=int, default=8)
+    parser.add_argument("--model-depth", type=int, default=16)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--latent-size", type=int, default=64)
     args = parser.parse_args()
