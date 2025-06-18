@@ -120,7 +120,7 @@ class DiTBlock(nn.Module):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(hidden_size, num_heads=16, qkv_bias=True, **block_kwargs)
-        self.ca_attn = CrossAttention(num_head, 1024, 768, in_proj_bias=False)
+        self.ca_attn = AttentionBlock(8, 128)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
@@ -131,13 +131,9 @@ class DiTBlock(nn.Module):
         )
 
     def forward(self, person, clothing, c):
+        person =  self.ca_attn(clothing, person)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
-        modulated_person = modulate(self.norm1(person), shift_msa, scale_msa)
-        modulated_person = modulated_person + gate_msa.unsqueeze(1) * self.attn(modulated_person)
-        modulated_clothing = modulate(self.norm1(clothing), shift_msa, scale_msa)
-        modulated_clothing = rearrange(modulated_clothing, 'b c t -> b t c')
-        person = person + rearrange(self.ca_attn(modulated_clothing, modulated_person), 'b t c -> b c t')
-        person = person * gate_msa.unsqueeze(1)
+        person = person + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(person), shift_msa, scale_msa))
         person = person + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(person), shift_mlp, scale_mlp))
         return person
 
@@ -304,7 +300,7 @@ class DiT(nn.Module):
         person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         garment = self.garment_embedder(garment) + self.pos_embed2
         t = self.t_embedder(t)  # (N, D)
-        garment = self.ca_clip(garment, clip_garment) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
+        garment = self.ca_clip(clip_garment, garment) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
         for person_block in self.person_blocks:
             person = person_block(person, garment, t)
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
