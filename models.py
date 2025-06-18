@@ -131,7 +131,7 @@ class DiTBlock(nn.Module):
         )
 
     def forward(self, person, clothing, c):
-        person =  self.ca_attn(clothing, person)
+        person =  self.ca_attn(person, clothing)
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         person = person + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(person), shift_msa, scale_msa))
         person = person + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(person), shift_mlp, scale_mlp))
