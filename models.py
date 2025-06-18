@@ -223,7 +223,6 @@ class DiT(nn.Module):
         num_patches = self.person_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
-        self.pos_embed2 = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
         self.person_blocks = nn.ModuleList([ # DiT block with semantic correspondence
             DiTBlock(mlp_ratio=mlp_ratio) for _ in range(depth)
@@ -250,9 +249,6 @@ class DiT(nn.Module):
         w = self.person_embedder.proj.weight.data
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.person_embedder.proj.bias, 0)
-
-        pos_embed2 = get_2d_sincos_pos_embed(self.pos_embed2.shape[-1], int(self.garment_embedder.num_patches ** 0.5))
-        self.pos_embed2.data.copy_(torch.from_numpy(pos_embed2).float().unsqueeze(0))
 
         # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
         w = self.garment_embedder.proj.weight.data
@@ -298,9 +294,9 @@ class DiT(nn.Module):
         t: (N,) tensor of diffusion timesteps
         """
         person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        garment = self.garment_embedder(garment) + self.pos_embed2
+        garment = self.garment_embedder(garment)
         t = self.t_embedder(t)  # (N, D)
-        garment = self.ca_clip(clip_garment, garment) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
+        garment = self.ca_clip(garment, clip_garment) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
         for person_block in self.person_blocks:
             person = person_block(person, garment, t)
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
