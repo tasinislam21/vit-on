@@ -56,7 +56,7 @@ class FinalLayer(nn.Module):
         return x
 
 class AttentionBlock(nn.Module):
-    def __init__(self, n_head: int, n_embd: int, d_context=1024):
+    def __init__(self, n_head: int, n_embd: int, d_context=768):
         super().__init__()
         channels = n_head * n_embd
         self.layernorm_2 = nn.LayerNorm(channels)
@@ -227,7 +227,7 @@ class DiT(nn.Module):
         self.person_blocks = nn.ModuleList([ # DiT block with semantic correspondence
             DiTBlock(mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
-        self.ca_clip = AttentionBlock(8, 96)
+        self.ca_clip = AttentionBlock(8, 96, 1024)
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
