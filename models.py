@@ -56,7 +56,7 @@ class FinalLayer(nn.Module):
         return x
 
 class AttentionBlock(nn.Module):
-    def __init__(self, n_head: int, n_embd: int, d_context=1024):
+    def __init__(self, n_head: int, n_embd: int, d_context=768):
         super().__init__()
         channels = n_head * n_embd
         self.layernorm_2 = nn.LayerNorm(channels)
