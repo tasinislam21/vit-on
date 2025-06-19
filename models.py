@@ -202,7 +202,7 @@ class DiT(nn.Module):
             patch_size=2,
             person_channels=12,  # noise + person + skeleton
             garment_channels=4, # cloth
-            hidden_size=1024,
+            hidden_size=768,
             depth=8,
             num_heads=16,
             mlp_ratio=4.0,
@@ -227,7 +227,7 @@ class DiT(nn.Module):
         self.person_blocks = nn.ModuleList([ # DiT block with semantic correspondence
             DiTBlock(mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
-        self.ca_clip = AttentionBlock(2, 25)
+        self.ca_clip = AttentionBlock(8, 128)
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
