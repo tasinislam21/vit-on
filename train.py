@@ -88,13 +88,14 @@ def main(args):
         checkpoint = torch.load(os.path.join(args.checkpoint_path, "backup_{}.pt".format(args.current_epoch)), weights_only=False, map_location='cpu')
         print("loaded checkpoint!")
     model = DiT(input_size=args.latent_size, depth=args.model_depth)
+    ema = deepcopy(model)  # Create an EMA of the model for use after training
     if checkpoint is not None:
         model.load_state_dict(checkpoint['model'])
-        ema = deepcopy(model)  # Create an EMA of the model for use after training
         ema.load_state_dict(checkpoint['ema'])
-        ema.to(device)
         print("model weight restored!")
-    model = DDP(model.to(device), device_ids=[rank])
+    model.to(device)
+    ema.to(device)
+    model = DDP(model, device_ids=[rank])
     vae = AutoencoderKL.from_pretrained(
         "CompVis/stable-diffusion-v1-4",
         subfolder="vae",
