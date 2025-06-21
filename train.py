@@ -83,16 +83,16 @@ def main(args):
     seed = args.global_seed * dist.get_world_size() + rank
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
-    model = DiT(input_size=args.latent_size, depth=args.model_depth).to(device)
-    ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     checkpoint = None
     if (args.checkpoint_path != None) and args.current_epoch != 0:
-        checkpoint = torch.load(os.path.join(args.checkpoint_path, "backup_{}.pt".format(args.current_epoch)), weights_only=False)
+        checkpoint = torch.load(os.path.join(args.checkpoint_path, "backup_{}.pt".format(args.current_epoch)), weights_only=False, map_location='cpu')
         print("loaded checkpoint!")
-    requires_grad(ema, False)
+    model = DiT(input_size=args.latent_size, depth=args.model_depth)
     if checkpoint is not None:
         model.load_state_dict(checkpoint['model'])
+        ema = deepcopy(model)  # Create an EMA of the model for use after training
         ema.load_state_dict(checkpoint['ema'])
+        ema.to(device)
         print("model weight restored!")
     model = DDP(model.to(device), device_ids=[rank])
     vae = AutoencoderKL.from_pretrained(
