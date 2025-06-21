@@ -87,7 +87,7 @@ def main(args):
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
     checkpoint = None
     if (args.checkpoint_path != None) and args.current_epoch != 0:
-        checkpoint = torch.load(os.path.join(args.checkpoint_path, "backup_{}.pt".format(args.current_epoch)))
+        checkpoint = torch.load(os.path.join(args.checkpoint_path, "backup_{}.pt".format(args.current_epoch)), weights_only=False)
         print("loaded checkpoint!")
     requires_grad(ema, False)
     if checkpoint is not None:
