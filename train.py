@@ -16,7 +16,7 @@ from models import DiT
 from train_dataloader import BaseDataset
 import torchvision
 import kornia.augmentation as K
-
+import os
 mean_candidate = [0.74112587, 0.69617281, 0.68865463]
 std_candidate = [0.2941623, 0.30806473, 0.30613222]
 
@@ -84,11 +84,17 @@ def main(args):
     torch.manual_seed(seed)
     torch.cuda.set_device(device)
     model = DiT(input_size=args.latent_size, depth=args.model_depth).to(device)
-
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
+    checkpoint = None
+    if (args.checkpoint_path != None) and args.current_epoch != 0:
+        checkpoint = torch.load(os.path.join(args.checkpoint_path, "backup_{}.pt".format(args.current_epoch)))
+        print("loaded checkpoint!")
     requires_grad(ema, False)
+    if checkpoint is not None:
+        model.load_state_dict(checkpoint['model'])
+        ema.load_state_dict(checkpoint['ema'])
+        print("model weight restored!")
     model = DDP(model.to(device), device_ids=[rank])
-
     vae = AutoencoderKL.from_pretrained(
         "CompVis/stable-diffusion-v1-4",
         subfolder="vae",
@@ -97,6 +103,10 @@ def main(args):
     vae.requires_grad_(False)
 
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    if checkpoint is not None:
+        opt.load_state_dict(checkpoint['opt'])
+        print("optimiser restored!")
+
     train_dataset = BaseDataset()
     sampler = DistributedSampler(
         train_dataset,
@@ -157,7 +167,7 @@ def main(args):
         latent = inv_normalize(latent).clamp(0, 1)
         return latent
 
-    for epoch in tqdm.tqdm(range(1000)):
+    for epoch in tqdm.tqdm(range(args.current_epoch+1, 1000)):
         for data in train_dataloader:
             input_person = data['input_person'].to(device)
             input_skeleton = data['input_skeleton'].to(device)
@@ -209,5 +219,8 @@ if __name__ == "__main__":
     parser.add_argument("--model-depth", type=int, default=16)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--latent-size", type=int, default=64)
+    parser.add_argument("--checkpoint-path", type=str, default=None)
+    parser.add_argument("--current-epoch", type=int, default=0)
+
     args = parser.parse_args()
     main(args)
