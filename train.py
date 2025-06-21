@@ -95,6 +95,7 @@ def main(args):
         print("model weight restored!")
     model.to(device)
     ema.to(device)
+    requires_grad(ema, False)
     model = DDP(model, device_ids=[rank])
     vae = AutoencoderKL.from_pretrained(
         "CompVis/stable-diffusion-v1-4",
