@@ -122,7 +122,8 @@ def main(args):
         sampler=sampler,
         num_workers=4,
         drop_last=False)
-    update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
+    if checkpoint is None:
+        update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
     model.train()
     ema.eval()
     train_steps = 0
