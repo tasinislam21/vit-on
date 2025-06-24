@@ -63,7 +63,7 @@ def forward_diffusion_sample(x_0, t):
     return sqrt_alphas_cumprod_t.to(t.device) * x_0.to(t.device) \
     + sqrt_one_minus_alphas_cumprod_t.to(t.device) * noise.to(t.device), noise.to(t.device)
 
-T = 1000
+T = 100
 betas = cosine_beta_schedule(timesteps=T)
 alphas = 1. - betas
 alphas_cumprod = torch.cumprod(alphas, axis=0)
