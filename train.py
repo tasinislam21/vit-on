@@ -145,16 +145,16 @@ def main(args):
 
     @torch.no_grad()
     def sample_timestep(input_person, input_clothing, clip_clothing, t):
-        betas_t = get_index_from_list(betas, t, input_person[:,8:12].shape)
+        betas_t = get_index_from_list(betas, t, input_person[:,12:16].shape)
         sqrt_one_minus_alphas_cumprod_t = get_index_from_list(
-            sqrt_one_minus_alphas_cumprod, t, input_person[:,8:12].shape
+            sqrt_one_minus_alphas_cumprod, t, input_person[:,12:16].shape
         )
-        sqrt_recip_alphas_t = get_index_from_list(sqrt_recip_alphas, t, input_person[:,8:12].shape)
+        sqrt_recip_alphas_t = get_index_from_list(sqrt_recip_alphas, t, input_person[:,12:16].shape)
         # Call model (current image - noise prediction)
         with torch.cuda.amp.autocast():
             sample_output = ema(input_person, input_clothing, clip_clothing, t.float())
         model_mean = sqrt_recip_alphas_t * (
-                input_person[:,8:12] - betas_t * sample_output / sqrt_one_minus_alphas_cumprod_t
+                input_person[:,12:16] - betas_t * sample_output / sqrt_one_minus_alphas_cumprod_t
         )
         if t.item() == 0:
             return model_mean
@@ -208,8 +208,8 @@ def main(args):
             for i in range(0, T)[::-1]:
                 t = torch.full((1,), i, device=device).long()
                 noise = sample_timestep(person_data, encoded_clothing, clip_clothing, t)
-                person_data[:, 8:12] = noise
-            final_image = VAE_decode(person_data[:, 8:12])
+                person_data[:, 12:16] = noise
+            final_image = VAE_decode(person_data[:, 12:16])
             writer.add_image('Fused', torchvision.utils.make_grid(inv_normalize(final_image)), train_steps)
             writer.add_image('Person', torchvision.utils.make_grid(inv_normalize(gt)), train_steps)
             writer.add_image('Clothing', torchvision.utils.make_grid(inv_normalize(input_clothing)), train_steps)
