@@ -104,7 +104,7 @@ def main(args):
     ).to(device)
     vae.requires_grad_(False)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=0)
+    opt = torch.optim.AdamW(model.parameters(), lr=1e-6, weight_decay=0.01)
     if checkpoint is not None:
         opt.load_state_dict(checkpoint['opt'])
         print("optimiser restored!")
