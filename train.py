@@ -184,7 +184,7 @@ def main(args):
             encoded_clothing = augment(encoded_clothing)
             encoded_gt = vae.encode(gt).latent_dist.sample() * 0.18215
 
-            person_data = torch.cat([encoded_person, encoded_skeleton], dim=1)
+            person_data = torch.cat([encoded_person, encoded_skeleton, encoded_clothing], dim=1)
             loss = get_loss(input_person=person_data, input_clothing=encoded_clothing, clip_clothing=clip_clothing, gt=encoded_gt)
             opt.zero_grad()
             loss.backward()
@@ -204,7 +204,7 @@ def main(args):
 
             b, _, _, _ = encoded_person.shape  # Also save some image samples
             noise = torch.randn([b, 4, args.latent_size, args.latent_size]).to(device)
-            person_data = torch.cat([encoded_person, encoded_skeleton, noise], dim=1)
+            person_data = torch.cat([encoded_person, encoded_skeleton, encoded_clothing, noise], dim=1)
             for i in range(0, T)[::-1]:
                 t = torch.full((1,), i, device=device).long()
                 noise = sample_timestep(person_data, encoded_clothing, clip_clothing, t)

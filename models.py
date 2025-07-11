@@ -200,7 +200,7 @@ class DiT(nn.Module):
             self,
             input_size=64,
             patch_size=2,
-            person_channels=12,  # noise + person + skeleton
+            person_channels=16,  # noise + person + skeleton + cloth
             garment_channels=4, # cloth
             hidden_size=768,
             depth=8,
