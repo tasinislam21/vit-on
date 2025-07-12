@@ -140,7 +140,7 @@ def main(args):
         input_person = torch.cat([input_person, x_noisy], dim=1)
 
         noise_pred = model(input_person, input_clothing, clip_clothing, timesteps.float())
-        loss = mseloss(noise_pred[:,12:16], noise)
+        loss = mseloss(noise_pred, noise)
         return loss
 
     @torch.no_grad()
