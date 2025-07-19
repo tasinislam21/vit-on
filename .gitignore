@@ -6,3 +6,5 @@
 /base
 /checkpoint
 /dataset*
+**/__pycache__
+**/*.pyc
