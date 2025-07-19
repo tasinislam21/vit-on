@@ -131,7 +131,8 @@ class DiTBlock(nn.Module):
         )
 
     def forward(self, person, clothing, c):
-        person =  self.ca_attn(person, clothing)
+        warp_cloth =  self.ca_attn(clothing, person) # warp the clothing according to the semantic structure
+        person =  self.ca_attn(person, warp_cloth) # # apply the warped clothing on the person
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         person = person + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(person), shift_msa, scale_msa))
         person = person + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(person), shift_mlp, scale_mlp))
@@ -287,7 +288,7 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, person, garment, clip_garment, t):
+    def forward(self, person, garment, t):
         """
         Forward pass of DiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -296,7 +297,6 @@ class DiT(nn.Module):
         person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         garment = self.garment_embedder(garment)
         t = self.t_embedder(t)  # (N, D)
-        garment = self.ca_clip(garment, clip_garment) # some clothing detail maybe lost due to garment embedder, clip may help to restore some
         for person_block in self.person_blocks:
             person = person_block(person, garment, t)
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
