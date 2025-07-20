@@ -56,7 +56,7 @@ class FinalLayer(nn.Module):
         return x
 
 class AttentionBlock(nn.Module):
-    def __init__(self, n_head: int, n_embd: int, d_context=768):
+    def __init__(self, n_head: int, n_embd: int, d_context=1152):
         super().__init__()
         channels = n_head * n_embd
         self.layernorm_2 = nn.LayerNorm(channels)
@@ -116,11 +116,12 @@ class CrossAttention(nn.Module):
         return output
 
 class DiTBlock(nn.Module):
-    def __init__(self, hidden_size = 768, num_head = 8, mlp_ratio=4.0, **block_kwargs):
+    def __init__(self, hidden_size = 1152, num_head = 8, mlp_ratio=4.0, **block_kwargs):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(hidden_size, num_heads=16, qkv_bias=True, **block_kwargs)
-        self.ca_attn = AttentionBlock(8, 128)
+        self.ca_person = AttentionBlock(8, 128)
+        self.ca_cloth = AttentionBlock(8, 128)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
@@ -131,8 +132,8 @@ class DiTBlock(nn.Module):
         )
 
     def forward(self, person, clothing, c):
-        warp_cloth =  self.ca_attn(clothing, person) # warp the clothing according to the semantic structure
-        person =  self.ca_attn(person, warp_cloth) # # apply the warped clothing on the person
+        warp_cloth =  self.ca_cloth(clothing, person) # warp the clothing according to the semantic structure
+        person =  self.ca_person(person, warp_cloth) # # apply the warped clothing on the person
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         person = person + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(person), shift_msa, scale_msa))
         person = person + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(person), shift_mlp, scale_mlp))
@@ -203,7 +204,7 @@ class DiT(nn.Module):
             patch_size=2,
             person_channels=16,  # noise + person + skeleton + cloth
             garment_channels=4, # cloth
-            hidden_size=768,
+            hidden_size=1152,
             depth=8,
             num_heads=16,
             mlp_ratio=4.0,
@@ -228,7 +229,6 @@ class DiT(nn.Module):
         self.person_blocks = nn.ModuleList([ # DiT block with semantic correspondence
             DiTBlock(mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
-        self.ca_clip = AttentionBlock(8, 128)
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
