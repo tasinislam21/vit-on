@@ -120,8 +120,6 @@ class DiTBlock(nn.Module):
         super().__init__()
         self.norm1 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.attn = Attention(hidden_size, num_heads=16, qkv_bias=True, **block_kwargs)
-        self.ca_person = AttentionBlock(8, 128)
-        self.ca_cloth = AttentionBlock(8, 128)
         self.norm2 = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         mlp_hidden_dim = int(hidden_size * mlp_ratio)
         approx_gelu = lambda: nn.GELU(approximate="tanh")
@@ -131,9 +129,7 @@ class DiTBlock(nn.Module):
             nn.Linear(hidden_size, 6 * hidden_size, bias=True)
         )
 
-    def forward(self, person, clothing, c):
-        warp_cloth =  self.ca_cloth(clothing, person) # warp the clothing according to the semantic structure
-        person =  self.ca_person(person, warp_cloth) # # apply the warped clothing on the person
+    def forward(self, person,  c):
         shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = self.adaLN_modulation(c).chunk(6, dim=1)
         person = person + gate_msa.unsqueeze(1) * self.attn(modulate(self.norm1(person), shift_msa, scale_msa))
         person = person + gate_mlp.unsqueeze(1) * self.mlp(modulate(self.norm2(person), shift_mlp, scale_mlp))
@@ -225,10 +221,14 @@ class DiT(nn.Module):
         num_patches = self.person_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
+        self.mains = mlist([])
+        for _ in range(depth):
+            self.mains.append(mlist([
+                AttentionBlock(8, 128),
+                AttentionBlock(8, 128),
+                DiTBlock(mlp_ratio=mlp_ratio)
+            ]))
 
-        self.person_blocks = nn.ModuleList([ # DiT block with semantic correspondence
-            DiTBlock(mlp_ratio=mlp_ratio) for _ in range(depth)
-        ])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
@@ -297,8 +297,10 @@ class DiT(nn.Module):
         person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         garment = self.garment_embedder(garment)
         t = self.t_embedder(t)  # (N, D)
-        for person_block in self.person_blocks:
-            person = person_block(person, garment, t)
+        for ca_person, ca_cloth, dit in self.mains:
+            garment = ca_cloth(garment, person)  # warp the clothing according to the semantic structure
+            person = ca_person(person, garment)  #  apply the warped clothing on the person
+            person = dit(person, t) # denoise
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
         person = self.unpatchify(person)  # (N, out_channels, H, W)
         return person
