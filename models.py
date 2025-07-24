@@ -224,12 +224,14 @@ class DiT(nn.Module):
         self.mains = mlist([])
         for _ in range(depth):
             self.mains.append(mlist([
-                AttentionBlock(8, 128),
-                AttentionBlock(8, 128),
-                DiTBlock(mlp_ratio=mlp_ratio)
+                AttentionBlock(8, 128, d_context=hidden_size),
+                AttentionBlock(8, 128, d_context=hidden_size),
+                DiTBlock(hidden_size=hidden_size, mlp_ratio=mlp_ratio)
             ]))
 
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
+        self.final_layer_warp = FinalLayer(hidden_size, patch_size, self.out_channels)
+
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -302,5 +304,7 @@ class DiT(nn.Module):
             person = ca_person(person, garment)  #  apply the warped clothing on the person
             person = dit(person, t) # denoise
         person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
+        garment = self.final_layer_warp(garment, t)
         person = self.unpatchify(person)  # (N, out_channels, H, W)
-        return person
+        garment = self.unpatchify(garment)
+        return person, garment

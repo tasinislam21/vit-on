@@ -132,15 +132,16 @@ def main(args):
     if get_rank() == 0:
         writer = SummaryWriter('runs')
 
-    def get_loss(input_person, input_clothing, gt):
+    def get_loss(input_person, input_clothing, gt, gt_warp):
         b, _, _, _ = input_person.shape
         timesteps = torch.randint(0, T, (b,), device=device)
         timesteps = timesteps.long()
         x_noisy, noise = forward_diffusion_sample(gt, timesteps)
         input_person = torch.cat([input_person, x_noisy], dim=1)
-        noise_pred = model(input_person, input_clothing, timesteps.float())
-        loss = mseloss(noise_pred, noise)
-        return loss
+        noise_pred, predict_warp = model(input_person, input_clothing, timesteps.float())
+        noise_loss = mseloss(noise_pred, noise)
+        warp_loss = mseloss(predict_warp, gt_warp)
+        return noise_loss, warp_loss
 
     @torch.no_grad()
     def sample_timestep(input_person, input_clothing, t):
@@ -151,7 +152,7 @@ def main(args):
         sqrt_recip_alphas_t = get_index_from_list(sqrt_recip_alphas, t, input_person[:,12:16].shape)
         # Call model (current image - noise prediction)
         with torch.cuda.amp.autocast():
-            sample_output = ema(input_person, input_clothing, t.float())
+            sample_output, warp = ema(input_person, input_clothing, t.float())
         model_mean = sqrt_recip_alphas_t * (
                 input_person[:,12:16] - betas_t * sample_output / sqrt_one_minus_alphas_cumprod_t
         )
@@ -160,7 +161,7 @@ def main(args):
         else:
             noise = torch.randn_like(input_person[:,8:12])
             posterior_variance_t = get_index_from_list(posterior_variance, t, input_person[:,8:12].shape)
-            return model_mean + torch.sqrt(posterior_variance_t) * noise
+            return model_mean + torch.sqrt(posterior_variance_t) * noise, warp
 
     @torch.no_grad()
     def VAE_decode(latent):
@@ -175,21 +176,25 @@ def main(args):
             input_skeleton = data['input_skeleton'].to(device)
             input_clothing = data['input_clothing'].to(device)
 
+            gt_warp = data['warp_clothing'].to(device)
             gt = data['gt'].to(device)
             encoded_person = vae.encode(input_person).latent_dist.sample() * 0.18215
             encoded_skeleton = vae.encode(input_skeleton).latent_dist.sample() * 0.18215
             encoded_clothing = vae.encode(input_clothing).latent_dist.sample() * 0.18215
             encoded_clothing = augment(encoded_clothing)
             encoded_gt = vae.encode(gt).latent_dist.sample() * 0.18215
+            encoded_warp = vae.encode(gt_warp).latent_dist.sample() * 0.18215
 
             person_data = torch.cat([encoded_person, encoded_skeleton, encoded_clothing], dim=1)
-            loss = get_loss(input_person=person_data, input_clothing=encoded_clothing, gt=encoded_gt)
+            loss_noise, loss_warp = get_loss(input_person=person_data, input_clothing=encoded_clothing, gt=encoded_gt, gt_warp=encoded_warp)
+            loss =loss_noise + loss_warp
             opt.zero_grad()
             loss.backward()
             opt.step()
             update_ema(ema, model.module)
             if train_steps % 1000 == 0 and get_rank() == 0:
-                writer.add_scalar('loss', loss, train_steps)
+                writer.add_scalar('noise', loss_noise, train_steps)
+                writer.add_scalar('warp', loss_warp, train_steps)
             train_steps += 1
         if get_rank() == 0 and epoch % 20 == 0:
             checkpoint = { # Make checkpoint
@@ -205,12 +210,14 @@ def main(args):
             person_data = torch.cat([encoded_person, encoded_skeleton, encoded_clothing, noise], dim=1)
             for i in range(0, T)[::-1]:
                 t = torch.full((1,), i, device=device).long()
-                noise = sample_timestep(person_data, encoded_clothing, t)
+                noise, warp = sample_timestep(person_data, encoded_clothing, t)
                 person_data[:, 12:16] = noise
             final_image = VAE_decode(person_data[:, 12:16])
+            final_warp = VAE_decode(warp)
             writer.add_image('Fused', torchvision.utils.make_grid(inv_normalize(final_image)), train_steps)
             writer.add_image('Person', torchvision.utils.make_grid(inv_normalize(gt)), train_steps)
             writer.add_image('Clothing', torchvision.utils.make_grid(inv_normalize(input_clothing)), train_steps)
+            writer.add_image('Warp', torchvision.utils.make_grid(inv_normalize(final_warp)), train_steps)
 
     torch.save(ema.state_dict(), 'checkpoint/final.pt')
 

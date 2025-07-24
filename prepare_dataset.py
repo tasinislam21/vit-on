@@ -47,7 +47,9 @@ def f(image_list):
         person_np = np.transpose(person_np, (2, 0, 1))
         mask = (segment_np == 126).astype(int)
         mask = np.expand_dims(mask, axis=0)
-        extracted_cloth = mask * person_np
+        extracted_cloth_np = mask * person_np
+        extracted_cloth = Image.fromarray(np.transpose(extracted_cloth_np, (1, 2, 0)).astype('uint8'), 'RGB')
+        extracted_cloth = transform_candidate(extracted_cloth)
 
         S_path = osp.join('dataset', 'image-densepose', file_name)
         skeleton = Image.open(S_path).convert('RGB')
@@ -60,9 +62,9 @@ def f(image_list):
 
         ground_truth = transform_candidate(image)
         clothing = transform_clothes(color)
-
         skeleton = transform_skeleton(skeleton)
         agnostic = transform_candidate(agnostic)
+        extracted_cloth = transform_candidate(extracted_cloth)
 
         if not os.path.exists(osp.join('dataset_binary','gt')):
             os.makedirs(osp.join('dataset_binary','gt'))
@@ -74,12 +76,15 @@ def f(image_list):
             os.makedirs(osp.join('dataset_binary','agnostic'))
         if not os.path.exists(osp.join('dataset_binary','clip_clothing')):
             os.makedirs(osp.join('dataset_binary','clip_clothing'))
+        if not os.path.exists(osp.join('dataset_binary','warped_cloth')):
+            os.makedirs(osp.join('dataset_binary','warped_cloth'))
 
-        clip_clothing = clip_processor(images=extracted_cloth, return_tensors="pt")
+        clip_clothing = clip_processor(images=extracted_cloth_np, return_tensors="pt")
         clip_clothing = {k: v for k, v in clip_clothing.items()}
         clip_clothing = clip_encoder(**clip_clothing).last_hidden_state
 
         torch.save(ground_truth, osp.join('dataset_binary','gt', file_name.replace('.jpg', '.pt')))
+        torch.save(extracted_cloth, osp.join('dataset_binary','warped_cloth', file_name.replace('.jpg', '.pt')))
         torch.save(skeleton, osp.join('dataset_binary','input_skeleton', file_name.replace('.jpg', '.pt')))
         torch.save(clothing, osp.join('dataset_binary','input_clothing', file_name.replace('.jpg', '.pt')))
         torch.save(agnostic, osp.join('dataset_binary','agnostic', file_name.replace('.jpg', '.pt')))
