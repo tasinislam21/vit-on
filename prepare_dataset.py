@@ -49,7 +49,6 @@ def f(image_list):
         mask = np.expand_dims(mask, axis=0)
         extracted_cloth_np = mask * person_np
         extracted_cloth = Image.fromarray(np.transpose(extracted_cloth_np, (1, 2, 0)).astype('uint8'), 'RGB')
-        extracted_cloth = transform_candidate(extracted_cloth)
 
         S_path = osp.join('dataset', 'image-densepose', file_name)
         skeleton = Image.open(S_path).convert('RGB')
@@ -79,7 +78,7 @@ def f(image_list):
         if not os.path.exists(osp.join('dataset_binary','warped_cloth')):
             os.makedirs(osp.join('dataset_binary','warped_cloth'))
 
-        clip_clothing = clip_processor(images=extracted_cloth_np, return_tensors="pt")
+        clip_clothing = clip_processor(images=color, return_tensors="pt")
         clip_clothing = {k: v for k, v in clip_clothing.items()}
         clip_clothing = clip_encoder(**clip_clothing).last_hidden_state
 

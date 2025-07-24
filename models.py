@@ -58,6 +58,7 @@ class FinalLayer(nn.Module):
 class AttentionBlock(nn.Module):
     def __init__(self, n_head: int, n_embd: int, d_context=1152):
         super().__init__()
+        self.channels = n_head * n_embd
         channels = n_head * n_embd
         self.layernorm_2 = nn.LayerNorm(channels)
         self.attention_2 = CrossAttention(n_head, channels, d_context, in_proj_bias=False)
@@ -200,7 +201,7 @@ class DiT(nn.Module):
             patch_size=2,
             person_channels=16,  # noise + person + skeleton + cloth
             garment_channels=4, # cloth
-            hidden_size=1152,
+            hidden_size=768,
             depth=8,
             num_heads=16,
             mlp_ratio=4.0,
@@ -221,13 +222,13 @@ class DiT(nn.Module):
         num_patches = self.person_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
+
         self.mains = mlist([])
         for _ in range(depth):
-            self.mains.append(mlist([
-                AttentionBlock(8, 128, d_context=hidden_size),
-                AttentionBlock(8, 128, d_context=hidden_size),
-                DiTBlock(hidden_size=hidden_size, mlp_ratio=mlp_ratio)
-            ]))
+            ab1 = AttentionBlock(8, 128, d_context=hidden_size)
+            ab2 = AttentionBlock(8, 128, d_context=hidden_size)
+            dit = DiTBlock(hidden_size=hidden_size, mlp_ratio=mlp_ratio)
+            self.mains.append(mlist([ab1, ab2, dit]))
 
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.final_layer_warp = FinalLayer(hidden_size, patch_size, self.out_channels)
@@ -290,7 +291,7 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, person, garment, t):
+    def forward(self, person, garment, clip_cloth, t):
         """
         Forward pass of DiT.
         x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -299,7 +300,7 @@ class DiT(nn.Module):
         person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
         garment = self.garment_embedder(garment)
         t = self.t_embedder(t)  # (N, D)
-        for ca_person, ca_cloth, dit in self.mains:
+        for ca_cloth, ca_person, dit in self.mains:
             garment = ca_cloth(garment, person)  # warp the clothing according to the semantic structure
             person = ca_person(person, garment)  #  apply the warped clothing on the person
             person = dit(person, t) # denoise

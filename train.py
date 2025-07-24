@@ -63,7 +63,7 @@ def forward_diffusion_sample(x_0, t):
     return sqrt_alphas_cumprod_t.to(t.device) * x_0.to(t.device) \
     + sqrt_one_minus_alphas_cumprod_t.to(t.device) * noise.to(t.device), noise.to(t.device)
 
-T = 100
+T = 200
 betas = cosine_beta_schedule(timesteps=T)
 alphas = 1. - betas
 alphas_cumprod = torch.cumprod(alphas, axis=0)
@@ -132,19 +132,19 @@ def main(args):
     if get_rank() == 0:
         writer = SummaryWriter('runs')
 
-    def get_loss(input_person, input_clothing, gt, gt_warp):
+    def get_loss(input_person, input_clothing, clip, gt, gt_warp):
         b, _, _, _ = input_person.shape
         timesteps = torch.randint(0, T, (b,), device=device)
         timesteps = timesteps.long()
         x_noisy, noise = forward_diffusion_sample(gt, timesteps)
         input_person = torch.cat([input_person, x_noisy], dim=1)
-        noise_pred, predict_warp = model(input_person, input_clothing, timesteps.float())
+        noise_pred, predict_warp = model(input_person, input_clothing, clip, timesteps.float())
         noise_loss = mseloss(noise_pred, noise)
         warp_loss = mseloss(predict_warp, gt_warp)
         return noise_loss, warp_loss
 
     @torch.no_grad()
-    def sample_timestep(input_person, input_clothing, t):
+    def sample_timestep(input_person, input_clothing, clip, t):
         betas_t = get_index_from_list(betas, t, input_person[:,12:16].shape)
         sqrt_one_minus_alphas_cumprod_t = get_index_from_list(
             sqrt_one_minus_alphas_cumprod, t, input_person[:,12:16].shape
@@ -152,15 +152,15 @@ def main(args):
         sqrt_recip_alphas_t = get_index_from_list(sqrt_recip_alphas, t, input_person[:,12:16].shape)
         # Call model (current image - noise prediction)
         with torch.cuda.amp.autocast():
-            sample_output, warp = ema(input_person, input_clothing, t.float())
+            sample_output, warp = ema(input_person, input_clothing, clip, t.float())
         model_mean = sqrt_recip_alphas_t * (
                 input_person[:,12:16] - betas_t * sample_output / sqrt_one_minus_alphas_cumprod_t
         )
         if t.item() == 0:
             return model_mean
         else:
-            noise = torch.randn_like(input_person[:,8:12])
-            posterior_variance_t = get_index_from_list(posterior_variance, t, input_person[:,8:12].shape)
+            noise = torch.randn_like(input_person[:,12:16])
+            posterior_variance_t = get_index_from_list(posterior_variance, t, input_person[:,12:16].shape)
             return model_mean + torch.sqrt(posterior_variance_t) * noise, warp
 
     @torch.no_grad()
@@ -175,7 +175,7 @@ def main(args):
             input_person = data['input_person'].to(device)
             input_skeleton = data['input_skeleton'].to(device)
             input_clothing = data['input_clothing'].to(device)
-
+            clip_clothing = data['clip_clothing'].to(device)
             gt_warp = data['warp_clothing'].to(device)
             gt = data['gt'].to(device)
             encoded_person = vae.encode(input_person).latent_dist.sample() * 0.18215
@@ -186,7 +186,7 @@ def main(args):
             encoded_warp = vae.encode(gt_warp).latent_dist.sample() * 0.18215
 
             person_data = torch.cat([encoded_person, encoded_skeleton, encoded_clothing], dim=1)
-            loss_noise, loss_warp = get_loss(input_person=person_data, input_clothing=encoded_clothing, gt=encoded_gt, gt_warp=encoded_warp)
+            loss_noise, loss_warp = get_loss(input_person=person_data, input_clothing=encoded_clothing, clip=clip_clothing, gt=encoded_gt, gt_warp=encoded_warp)
             loss =loss_noise + loss_warp
             opt.zero_grad()
             loss.backward()
@@ -210,7 +210,7 @@ def main(args):
             person_data = torch.cat([encoded_person, encoded_skeleton, encoded_clothing, noise], dim=1)
             for i in range(0, T)[::-1]:
                 t = torch.full((1,), i, device=device).long()
-                noise, warp = sample_timestep(person_data, encoded_clothing, t)
+                noise, warp = sample_timestep(person_data, encoded_clothing, clip_clothing, t)
                 person_data[:, 12:16] = noise
             final_image = VAE_decode(person_data[:, 12:16])
             final_warp = VAE_decode(warp)
