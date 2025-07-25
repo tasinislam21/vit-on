@@ -193,7 +193,6 @@ def main(args):
             if train_steps % 1000 == 0 and get_rank() == 0:
                 writer.add_scalar('noise', loss_noise, train_steps)
             train_steps += 1
-            break
         if get_rank() == 0 and epoch % 20 == 0:
             checkpoint = { # Make checkpoint
                 "model": model.module.state_dict(),
