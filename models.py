@@ -199,8 +199,7 @@ class DiT(nn.Module):
             self,
             input_size=64,
             patch_size=2,
-            person_channels=16,  # noise + person + skeleton + cloth
-            garment_channels=4, # cloth
+            garment_channels=12, # cloth + skeleton + noise
             hidden_size=768,
             depth=8,
             num_heads=16,
@@ -209,30 +208,27 @@ class DiT(nn.Module):
     ):
         super().__init__()
         self.learn_sigma = learn_sigma
-        self.person_channels = person_channels
         self.garment_channels = garment_channels
         self.out_channels = 4
         self.patch_size = patch_size
         self.num_heads = num_heads
 
-        self.person_embedder = PatchEmbed(input_size, patch_size, person_channels, hidden_size, bias=True)
         self.garment_embedder = PatchEmbed(input_size, patch_size, garment_channels, hidden_size, bias=True)
 
         self.t_embedder = TimestepEmbedder(hidden_size)
-        num_patches = self.person_embedder.num_patches
+        num_patches = self.garment_embedder.num_patches
         # Will use fixed sin-cos embedding:
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches, hidden_size), requires_grad=False)
 
         self.mains = mlist([])
         for _ in range(depth):
-            ab1 = AttentionBlock(8, 128, d_context=hidden_size)
-            ab2 = AttentionBlock(8, 128, d_context=hidden_size)
+            #ab1 = AttentionBlock(8, 128, d_context=hidden_size)
+            #ab2 = AttentionBlock(8, 128, d_context=hidden_size)
             dit = DiTBlock(hidden_size=hidden_size, mlp_ratio=mlp_ratio)
-            self.mains.append(mlist([ab1, ab2, dit]))
+            #self.mains.append(mlist([ab1, ab2, dit]))
+            self.mains.append(dit)
 
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
-        self.final_layer_warp = FinalLayer(hidden_size, patch_size, self.out_channels)
-
         self.initialize_weights()
 
     def initialize_weights(self):
@@ -246,13 +242,8 @@ class DiT(nn.Module):
         self.apply(_basic_init)
 
         # Initialize (and freeze) pos_embed by sin-cos embedding:
-        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.person_embedder.num_patches ** 0.5))
+        pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.garment_embedder.num_patches ** 0.5))
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
-
-        # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
-        w = self.person_embedder.proj.weight.data
-        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
-        nn.init.constant_(self.person_embedder.proj.bias, 0)
 
         # Initialize patch_embed like nn.Linear (instead of nn.Conv2d):
         w = self.garment_embedder.proj.weight.data
@@ -266,7 +257,8 @@ class DiT(nn.Module):
         nn.init.normal_(self.t_embedder.mlp[2].weight, std=0.02)
 
         # Zero-out adaLN modulation layers in DiT blocks:
-        for _, _, block in self.mains:
+        #for _, _, block in self.mains:
+        for block in self.mains:
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
@@ -282,7 +274,7 @@ class DiT(nn.Module):
         imgs: (N, H, W, C)
         """
         c = self.out_channels
-        p = self.person_embedder.patch_size[0]
+        p = self.garment_embedder.patch_size[0]
         h = w = int(x.shape[1] ** 0.5)
         assert h * w == x.shape[1]
 
@@ -291,21 +283,11 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, person, garment, clip_cloth, t):
-        """
-        Forward pass of DiT.
-        x: (N, C, H, W) tensor of spatial inputs (images or latent representations of images)
-        t: (N,) tensor of diffusion timesteps
-        """
-        person = self.person_embedder(person) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        garment = self.garment_embedder(garment)
+    def forward(self, garment, t):
+        garment = self.garment_embedder(garment) + self.pos_embed
         t = self.t_embedder(t)  # (N, D)
-        for ca_cloth, ca_person, dit in self.mains:
-            garment = ca_cloth(garment, person)  # warp the clothing according to the semantic structure
-            person = ca_person(person, garment)  #  apply the warped clothing on the person
-            person = dit(person, t) # denoise
-        person = self.final_layer(person, t)  # (N, T, patch_size ** 2 * out_channels)
-        garment = self.final_layer_warp(garment, t)
-        person = self.unpatchify(person)  # (N, out_channels, H, W)
+        for dit in self.mains:
+            garment = dit(garment, t) # denoise
+        garment = self.final_layer(garment, t)  # (N, T, patch_size ** 2 * out_channels)
         garment = self.unpatchify(garment)
-        return person, garment
+        return garment
