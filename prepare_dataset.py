@@ -10,7 +10,7 @@ import argparse
 
 def get_transform(normalize=True, mean=None, std=None):
     transform_list = []
-    transform_list += [transforms.Resize((512, 384))]
+    transform_list += [transforms.Resize((256, 192))]
     transform_list += [transforms.ToTensor()]
     if normalize:
         transform_list += [transforms.Normalize(mean=mean, std=std)]
@@ -40,15 +40,15 @@ def f(image_list):
         image = Image.open(B_path).convert('RGB')
 
         X_path = osp.join('dataset', 'image-parse-v3', file_name.replace('jpg', 'png'))
-        person = Image.open(B_path).resize((384, 512))
-        segment = Image.open(X_path).convert('L').resize((384, 512), resample=0)
+        person = Image.open(B_path).resize((192, 256))
+        segment = Image.open(X_path).convert('L').resize((192, 256), resample=0)
         segment_np = np.array(segment)
         person_np = np.array(person)
         person_np = np.transpose(person_np, (2, 0, 1))
         mask = (segment_np == 126).astype(int)
         mask = np.expand_dims(mask, axis=0)
         extracted_cloth_np = mask * person_np
-        extracted_cloth = Image.fromarray(np.transpose(extracted_cloth_np, (1, 2, 0)).astype('uint8'), 'RGB')
+        extracted_cloth_pil = Image.fromarray(np.transpose(extracted_cloth_np, (1, 2, 0)).astype('uint8'), 'RGB')
 
         S_path = osp.join('dataset', 'image-densepose', file_name)
         skeleton = Image.open(S_path).convert('RGB')
@@ -63,7 +63,7 @@ def f(image_list):
         clothing = transform_clothes(color)
         skeleton = transform_skeleton(skeleton)
         agnostic = transform_candidate(agnostic)
-        extracted_cloth = transform_candidate(extracted_cloth)
+        extracted_cloth = transform_candidate(extracted_cloth_pil)
 
         if not os.path.exists(osp.join('dataset_binary','gt')):
             os.makedirs(osp.join('dataset_binary','gt'))
@@ -78,7 +78,7 @@ def f(image_list):
         if not os.path.exists(osp.join('dataset_binary','warped_cloth')):
             os.makedirs(osp.join('dataset_binary','warped_cloth'))
 
-        clip_clothing = clip_processor(images=color, return_tensors="pt")
+        clip_clothing = clip_processor(images=extracted_cloth_pil, return_tensors="pt")
         clip_clothing = {k: v for k, v in clip_clothing.items()}
         clip_clothing = clip_encoder(**clip_clothing).last_hidden_state
 
@@ -95,7 +95,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
     name_list = os.listdir('dataset/image')
     smaller_list = np.array_split(name_list, args.cpu_core_use)
+    processes = []
     for smaller in smaller_list:
         p = Process(target=f, args=(smaller,))
         p.start()
+        print("starting process")
+        processes.append(p)
+    for p in processes:
         p.join()

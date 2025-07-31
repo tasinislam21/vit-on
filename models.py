@@ -197,9 +197,10 @@ mlist = nn.ModuleList
 class DiT(nn.Module):
     def __init__(
             self,
-            input_size=64,
+            input_size=32,
             patch_size=2,
-            garment_channels=12, # cloth + skeleton + noise
+            garment_channels=4, # cloth
+            pose_channels=8, # pose + noise
             hidden_size=768,
             depth=8,
             num_heads=16,
@@ -214,6 +215,7 @@ class DiT(nn.Module):
         self.num_heads = num_heads
 
         self.garment_embedder = PatchEmbed(input_size, patch_size, garment_channels, hidden_size, bias=True)
+        self.pose_embedder = PatchEmbed(input_size, patch_size, pose_channels, hidden_size, bias=True)
 
         self.t_embedder = TimestepEmbedder(hidden_size)
         num_patches = self.garment_embedder.num_patches
@@ -222,12 +224,12 @@ class DiT(nn.Module):
 
         self.mains = mlist([])
         for _ in range(depth):
-            #ab1 = AttentionBlock(8, 128, d_context=hidden_size)
-            #ab2 = AttentionBlock(8, 128, d_context=hidden_size)
-            dit = DiTBlock(hidden_size=hidden_size, mlp_ratio=mlp_ratio)
-            #self.mains.append(mlist([ab1, ab2, dit]))
-            self.mains.append(dit)
+            ca_warp = AttentionBlock(2, 128, d_context=hidden_size)
+            ca_apply = AttentionBlock(2, 128, d_context=hidden_size)
 
+            dit = DiTBlock(hidden_size=hidden_size, mlp_ratio=mlp_ratio)
+            self.mains.append(mlist([ca_warp, ca_apply, dit]))
+        self.warp_adapter = torch.nn.Conv1d(256, 50, 3, 1, 1, 1)
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
         self.initialize_weights()
 
@@ -250,6 +252,10 @@ class DiT(nn.Module):
         nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
         nn.init.constant_(self.garment_embedder.proj.bias, 0)
 
+        w = self.pose_embedder.proj.weight.data
+        nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        nn.init.constant_(self.pose_embedder.proj.bias, 0)
+
         # Initialize label embedding table:
 
         # Initialize timestep embedding MLP:
@@ -258,7 +264,7 @@ class DiT(nn.Module):
 
         # Zero-out adaLN modulation layers in DiT blocks:
         #for _, _, block in self.mains:
-        for block in self.mains:
+        for _, _, block in self.mains:
             nn.init.constant_(block.adaLN_modulation[-1].weight, 0)
             nn.init.constant_(block.adaLN_modulation[-1].bias, 0)
 
@@ -283,11 +289,16 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, h * p))
         return imgs
 
-    def forward(self, garment, t):
-        garment = self.garment_embedder(garment) + self.pos_embed
+    def forward(self, garment, pose, t):
+        pose = self.pose_embedder(pose) + self.pos_embed
+        garment = self.garment_embedder(garment)
         t = self.t_embedder(t)  # (N, D)
-        for dit in self.mains:
-            garment = dit(garment, t) # denoise
-        garment = self.final_layer(garment, t)  # (N, T, patch_size ** 2 * out_channels)
-        garment = self.unpatchify(garment)
-        return garment
+
+        for ca_warp, ca_apply, dit in self.mains:
+            garment_warp = ca_warp(garment, pose) # warp
+            pose = ca_apply(pose, garment_warp) # apply warp clothing
+            pose = dit(pose, t) # denoise
+        pose = self.final_layer(pose, t)  # (N, T, patch_size ** 2 * out_channels)
+        pose = self.unpatchify(pose)
+        garment_warp = self.warp_adapter(garment_warp)
+        return pose, garment_warp

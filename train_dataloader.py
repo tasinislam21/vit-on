@@ -4,10 +4,10 @@ import torch
 import os.path as osp
 
 class BaseDataset(data.Dataset):
-    def __init__(self):
+    def __init__(self, padding = 64):
         super(BaseDataset, self).__init__()
         self.name_list = os.listdir('dataset_binary/gt')
-        self.m = torch.nn.ZeroPad2d((64, 64, 0, 0))
+        self.m = torch.nn.ZeroPad2d((padding, padding, 0, 0))
 
     def __getitem__(self, index):
         name = self.name_list[index]
