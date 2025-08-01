@@ -65,7 +65,7 @@ def forward_diffusion_sample(x_0, t):
     return sqrt_alphas_cumprod_t.to(t.device) * x_0.to(t.device) \
     + sqrt_one_minus_alphas_cumprod_t.to(t.device) * noise.to(t.device), noise.to(t.device)
 
-T = 200
+T = 100
 betas = cosine_beta_schedule(timesteps=T)
 alphas = 1. - betas
 alphas_cumprod = torch.cumprod(alphas, axis=0)
@@ -144,7 +144,7 @@ def main(args):
         noise_pred, warp_pred = model(input_clothing, input_pose, timesteps.float())
         noise_loss = mseloss(noise_pred, noise)
         warp_loss = mseloss(warp_pred, warp_clip)
-        return noise_loss + warp_loss
+        return noise_loss, warp_loss
 
     @torch.no_grad()
     def sample_timestep(input_pose, input_clothing, t):
@@ -184,15 +184,16 @@ def main(args):
             encoded_clothing = augment(encoded_clothing)
             encoded_warp = vae.encode(gt_warp).latent_dist.sample() * 0.18215
 
-            loss_noise = get_loss(input_clothing=encoded_clothing, input_pose=encoded_skeleton, gt_warp=encoded_warp, warp_clip=warp_clip)
+            loss_noise, loss_warp = get_loss(input_clothing=encoded_clothing, input_pose=encoded_skeleton, gt_warp=encoded_warp, warp_clip=warp_clip)
 
-            loss = loss_noise
+            loss = loss_noise + loss_warp
             opt.zero_grad()
             loss.backward()
             opt.step()
             update_ema(ema, model.module)
             if train_steps % 1000 == 0 and get_rank() == 0:
                 writer.add_scalar('noise', loss_noise, train_steps)
+                writer.add_scalar('warp', loss_warp, train_steps)
             train_steps += 1
         if get_rank() == 0 and epoch % 20 == 0:
             checkpoint = { # Make checkpoint

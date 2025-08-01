@@ -108,6 +108,7 @@ class CrossAttention(nn.Module):
 
         weight = q @ k.transpose(-1, -2)
         weight /= math.sqrt(self.d_head)
+        weight = torch.clamp(weight, -40, 40)
         weight = F.softmax(weight, dim=-1)
 
         output = weight @ v
